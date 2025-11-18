@@ -1,0 +1,48 @@
+manager_bot:
+  token: "YOUR_MANAGER_BOT_TOKEN"
+  superusers: [123456789, 987654321]
+
+database:
+  type: "sqlite"
+  dsn: "bot.db"
+
+redis:
+  enabled: false
+  address: "localhost:6379"
+  password: ""
+  db: 0
+
+rate_limit:
+  telegram_api: 25
+  guest_message: 1
+
+retry:
+  max_attempts: 10
+  interval_seconds: 30
+
+log:
+  level: "debug"
+  output: "stdout"
+  file_path: "bot.log"
+
+environment: "development"
+
+# Encryption key for bot tokens (32 bytes, base64 encoded)
+# Generate with: openssl rand -base64 32
+encryption_key: ""
+
+# Proxy configuration for Telegram API requests
+# Enable proxy when direct access to Telegram API is not available
+proxy:
+  enabled: false
+  # Proxy URL, supports http, https, and socks5 protocols
+  # Examples:
+  #   http://127.0.0.1:7890
+  #   socks5://127.0.0.1:1080
+  #   http://user:pass@proxy.example.com:8080
+  url: ""
+  # Optional: proxy authentication username
+  username: ""
+  # Optional: proxy authentication password
+  password: ""
+
