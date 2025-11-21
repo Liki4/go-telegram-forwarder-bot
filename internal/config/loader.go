@@ -110,6 +110,21 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("proxy.url is required when proxy is enabled")
 	}
 
+	// Validate log output
+	validOutputs := map[string]bool{
+		"stdout": true,
+		"file":   true,
+		"both":   true,
+	}
+	if !validOutputs[cfg.Log.Output] {
+		return fmt.Errorf("log.output must be one of: stdout, file, both")
+	}
+
+	// If output is file or both, file_path is required
+	if (cfg.Log.Output == "file" || cfg.Log.Output == "both") && cfg.Log.FilePath == "" {
+		return fmt.Errorf("log.file_path is required when log.output is file or both")
+	}
+
 	return nil
 }
 

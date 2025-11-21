@@ -22,6 +22,10 @@ retry:
 
 log:
   level: "debug"
+  # Log output mode: stdout, file, or both
+  # - stdout: Output to console only
+  # - file: Output to file only
+  # - both: Output to both console and file
   output: "stdout"
   file_path: "bot.log"
 

@@ -30,7 +30,8 @@ func New(cfg config.LogConfig) (*zap.Logger, error) {
 	encoderConfig.EncodeLevel = zapcore.LowercaseLevelEncoder
 
 	var writeSyncer zapcore.WriteSyncer
-	if cfg.Output == "file" {
+	switch cfg.Output {
+	case "file":
 		fileWriter := &lumberjack.Logger{
 			Filename:   cfg.FilePath,
 			MaxSize:    100,
@@ -39,7 +40,20 @@ func New(cfg config.LogConfig) (*zap.Logger, error) {
 			Compress:   true,
 		}
 		writeSyncer = zapcore.AddSync(fileWriter)
-	} else {
+	case "both":
+		// Output to both stdout and file
+		fileWriter := &lumberjack.Logger{
+			Filename:   cfg.FilePath,
+			MaxSize:    100,
+			MaxBackups: 3,
+			MaxAge:     28,
+			Compress:   true,
+		}
+		writeSyncer = zapcore.NewMultiWriteSyncer(
+			zapcore.AddSync(os.Stdout),
+			zapcore.AddSync(fileWriter),
+		)
+	default: // "stdout" or any other value defaults to stdout
 		writeSyncer = zapcore.AddSync(os.Stdout)
 	}
 
