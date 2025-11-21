@@ -443,7 +443,7 @@ func (f *Forwarder) ForwardReplyToGuest(
 	}
 
 	return f.retryHandler.Retry(ctx, func() error {
-		_, err := bot.ForwardMessage(
+		forwardedMsg, err := bot.ForwardMessage(
 			mapping.GuestChatID,
 			recipientChatID,
 			replyMessage.MessageId,
@@ -452,19 +452,91 @@ func (f *Forwarder) ForwardReplyToGuest(
 			return fmt.Errorf("failed to forward reply: %w", err)
 		}
 
+		// Record the mapping with the bot's message ID sent to guest
+		// This is critical: when guest replies to this message, we need to find
+		// the mapping using the message ID that bot sent to guest
 		replyMapping := &models.MessageMapping{
 			BotID:              botID,
 			GuestChatID:        mapping.GuestChatID,
-			GuestMessageID:     mapping.GuestMessageID,
+			GuestMessageID:     forwardedMsg.MessageId, // Use the message ID that bot sent to guest
 			RecipientChatID:    recipientChatID,
 			RecipientMessageID: replyMessage.MessageId,
 			Direction:          models.MessageDirectionOutbound,
 		}
 
+		f.logger.Debug("Creating reply mapping for recipient reply to guest",
+			zap.String("bot_id", botID.String()),
+			zap.Int64("guest_chat_id", mapping.GuestChatID),
+			zap.Int64("guest_message_id", forwardedMsg.MessageId),
+			zap.Int64("recipient_chat_id", recipientChatID),
+			zap.Int64("recipient_message_id", replyMessage.MessageId))
+
 		if err := f.messageMappingRepo.Create(replyMapping); err != nil {
 			f.logger.Warn("Failed to create reply mapping",
 				zap.String("bot_id", botID.String()),
 				zap.Error(err))
+		} else {
+			f.logger.Debug("Reply mapping created successfully",
+				zap.String("bot_id", botID.String()),
+				zap.Int64("guest_message_id", forwardedMsg.MessageId),
+				zap.Int64("recipient_message_id", replyMessage.MessageId))
+		}
+
+		return nil
+	})
+}
+
+// ForwardGuestReplyToRecipient forwards a guest's reply message to a specific recipient
+func (f *Forwarder) ForwardGuestReplyToRecipient(
+	ctx context.Context,
+	bot *gotgbot.Bot,
+	botID uuid.UUID,
+	guestChatID int64,
+	guestReplyMessageID int64,
+	guestReplyToMessageID int64,
+	recipientChatID int64,
+) error {
+	if !f.rateLimiter.AllowTelegramAPI(ctx) {
+		return fmt.Errorf("rate limit exceeded")
+	}
+
+	return f.retryHandler.Retry(ctx, func() error {
+		forwardedMsg, err := bot.ForwardMessage(
+			recipientChatID,
+			guestChatID,
+			guestReplyMessageID,
+			nil)
+		if err != nil {
+			return fmt.Errorf("failed to forward guest reply: %w", err)
+		}
+
+		// Record the mapping: guest's reply message forwarded to recipient
+		// Direction is Inbound because message flows from guest to recipient
+		replyMapping := &models.MessageMapping{
+			BotID:              botID,
+			GuestChatID:        guestChatID,
+			GuestMessageID:     guestReplyMessageID, // Guest's reply message ID
+			RecipientChatID:    recipientChatID,
+			RecipientMessageID: forwardedMsg.MessageId, // Bot's message ID sent to recipient
+			Direction:          models.MessageDirectionInbound,
+		}
+
+		f.logger.Debug("Creating reply mapping for guest reply to recipient",
+			zap.String("bot_id", botID.String()),
+			zap.Int64("guest_chat_id", guestChatID),
+			zap.Int64("guest_message_id", guestReplyMessageID),
+			zap.Int64("recipient_chat_id", recipientChatID),
+			zap.Int64("recipient_message_id", forwardedMsg.MessageId))
+
+		if err := f.messageMappingRepo.Create(replyMapping); err != nil {
+			f.logger.Warn("Failed to create reply mapping",
+				zap.String("bot_id", botID.String()),
+				zap.Error(err))
+		} else {
+			f.logger.Debug("Reply mapping created successfully",
+				zap.String("bot_id", botID.String()),
+				zap.Int64("guest_message_id", guestReplyMessageID),
+				zap.Int64("recipient_message_id", forwardedMsg.MessageId))
 		}
 
 		return nil

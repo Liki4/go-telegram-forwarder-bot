@@ -10,6 +10,7 @@ type MessageMappingRepository interface {
 	Create(mapping *models.MessageMapping) error
 	GetByID(id uuid.UUID) (*models.MessageMapping, error)
 	GetByGuestMessage(botID uuid.UUID, guestChatID int64, guestMessageID int64) (*models.MessageMapping, error)
+	GetAllByGuestMessage(botID uuid.UUID, guestChatID int64, guestMessageID int64) ([]*models.MessageMapping, error)
 	GetByRecipientMessage(botID uuid.UUID, recipientChatID int64, recipientMessageID int64) (*models.MessageMapping, error)
 	CountByBotIDAndDirection(botID uuid.UUID, direction models.MessageDirection) (int64, error)
 }
@@ -41,6 +42,18 @@ func (r *messageMappingRepository) GetByGuestMessage(botID uuid.UUID, guestChatI
 		return nil, err
 	}
 	return &mapping, nil
+}
+
+func (r *messageMappingRepository) GetAllByGuestMessage(botID uuid.UUID, guestChatID int64, guestMessageID int64) ([]*models.MessageMapping, error) {
+	var mappings []*models.MessageMapping
+	// Search for both Inbound and Outbound directions
+	// Inbound: guest's original message forwarded to recipient
+	// Outbound: recipient's reply forwarded to guest (bot's message to guest)
+	if err := r.db.Where("bot_id = ? AND guest_chat_id = ? AND guest_message_id = ?",
+		botID, guestChatID, guestMessageID).Find(&mappings).Error; err != nil {
+		return nil, err
+	}
+	return mappings, nil
 }
 
 func (r *messageMappingRepository) GetByRecipientMessage(botID uuid.UUID, recipientChatID int64, recipientMessageID int64) (*models.MessageMapping, error) {

@@ -19,21 +19,22 @@ import (
 )
 
 type Service struct {
-	botID              uuid.UUID
-	botRepo            repository.BotRepository
-	recipientRepo      repository.RecipientRepository
-	guestRepo          repository.GuestRepository
-	blacklistRepo      repository.BlacklistRepository
-	botAdminRepo       repository.BotAdminRepository
-	messageMappingRepo repository.MessageMappingRepository
-	userRepo           repository.UserRepository
-	auditLogRepo       repository.AuditLogRepository
-	messageForwarder   *message.Forwarder
-	blacklistService   *blacklist.Service
-	statsService       *statistics.Service
-	config             *config.Config
-	logger             *zap.Logger
-	encryptionKey      []byte
+	botID                        uuid.UUID
+	botRepo                      repository.BotRepository
+	recipientRepo                repository.RecipientRepository
+	guestRepo                    repository.GuestRepository
+	blacklistRepo                repository.BlacklistRepository
+	blacklistApprovalMessageRepo repository.BlacklistApprovalMessageRepository
+	botAdminRepo                 repository.BotAdminRepository
+	messageMappingRepo           repository.MessageMappingRepository
+	userRepo                     repository.UserRepository
+	auditLogRepo                 repository.AuditLogRepository
+	messageForwarder             *message.Forwarder
+	blacklistService             *blacklist.Service
+	statsService                 *statistics.Service
+	config                       *config.Config
+	logger                       *zap.Logger
+	encryptionKey                []byte
 }
 
 func NewService(
@@ -42,6 +43,7 @@ func NewService(
 	recipientRepo repository.RecipientRepository,
 	guestRepo repository.GuestRepository,
 	blacklistRepo repository.BlacklistRepository,
+	blacklistApprovalMessageRepo repository.BlacklistApprovalMessageRepository,
 	botAdminRepo repository.BotAdminRepository,
 	messageMappingRepo repository.MessageMappingRepository,
 	userRepo repository.UserRepository,
@@ -58,21 +60,22 @@ func NewService(
 	}
 
 	return &Service{
-		botID:              botID,
-		botRepo:            botRepo,
-		recipientRepo:      recipientRepo,
-		guestRepo:          guestRepo,
-		blacklistRepo:      blacklistRepo,
-		botAdminRepo:       botAdminRepo,
-		messageMappingRepo: messageMappingRepo,
-		userRepo:           userRepo,
-		auditLogRepo:       auditLogRepo,
-		messageForwarder:   messageForwarder,
-		blacklistService:   blacklistService,
-		statsService:       statsService,
-		config:             cfg,
-		logger:             logger,
-		encryptionKey:      key,
+		botID:                        botID,
+		botRepo:                      botRepo,
+		recipientRepo:                recipientRepo,
+		guestRepo:                    guestRepo,
+		blacklistRepo:                blacklistRepo,
+		blacklistApprovalMessageRepo: blacklistApprovalMessageRepo,
+		botAdminRepo:                 botAdminRepo,
+		messageMappingRepo:           messageMappingRepo,
+		userRepo:                     userRepo,
+		auditLogRepo:                 auditLogRepo,
+		messageForwarder:             messageForwarder,
+		blacklistService:             blacklistService,
+		statsService:                 statsService,
+		config:                       cfg,
+		logger:                       logger,
+		encryptionKey:                key,
 	}, nil
 }
 
@@ -253,30 +256,102 @@ func (s *Service) HandleReply(ctx context.Context, b *gotgbot.Bot, update *ext.C
 		zap.String("bot_id", s.botID.String()),
 		zap.Int64("chat_id", chatID))
 	_, err := s.recipientRepo.GetByBotIDAndChatID(s.botID, chatID)
-	if err != nil {
-		s.logger.Debug("Reply is not from a recipient, ignoring",
+	if err == nil {
+		// Reply is from a recipient, forward to guest
+		s.logger.Debug("Reply is from a recipient, forwarding to guest",
 			zap.String("bot_id", s.botID.String()),
-			zap.Int64("chat_id", chatID),
-			zap.Error(err))
+			zap.Int64("message_id", messageID),
+			zap.Int64("recipient_chat_id", chatID))
+		err = s.messageForwarder.ForwardReplyToGuest(ctx, b, s.botID, chatID, replyMessage)
+		if err != nil {
+			s.logger.Debug("Failed to forward reply to guest",
+				zap.String("bot_id", s.botID.String()),
+				zap.Int64("message_id", messageID),
+				zap.Error(err))
+		} else {
+			s.logger.Debug("Reply forwarded to guest successfully",
+				zap.String("bot_id", s.botID.String()),
+				zap.Int64("message_id", messageID))
+		}
+		return err
+	}
+
+	// Reply is from a guest, forward to corresponding recipient(s)
+	s.logger.Debug("Reply is from a guest, forwarding to corresponding recipient(s)",
+		zap.String("bot_id", s.botID.String()),
+		zap.Int64("message_id", messageID),
+		zap.Int64("guest_chat_id", chatID),
+		zap.Int64("reply_to_message_id", replyToMessageID))
+
+	// Check if user is blacklisted
+	userID := update.EffectiveUser.Id
+	isBlacklisted, err := s.blacklistService.IsBlacklisted(s.botID, userID)
+	if err != nil {
+		s.logger.Warn("Failed to check blacklist", zap.Error(err))
+	} else if isBlacklisted {
+		s.logger.Debug("User is blacklisted, ignoring reply",
+			zap.String("bot_id", s.botID.String()),
+			zap.Int64("user_id", userID),
+			zap.Int64("message_id", messageID))
 		return nil
 	}
 
-	s.logger.Debug("Reply is from a recipient, forwarding to guest",
-		zap.String("bot_id", s.botID.String()),
-		zap.Int64("message_id", messageID),
-		zap.Int64("recipient_chat_id", chatID))
-	err = s.messageForwarder.ForwardReplyToGuest(ctx, b, s.botID, chatID, replyMessage)
+	// Find all message mappings for the replied message
+	mappings, err := s.messageMappingRepo.GetAllByGuestMessage(s.botID, chatID, replyToMessageID)
 	if err != nil {
-		s.logger.Debug("Failed to forward reply to guest",
+		s.logger.Debug("Failed to find message mappings for guest reply",
+			zap.String("bot_id", s.botID.String()),
+			zap.Int64("guest_chat_id", chatID),
+			zap.Int64("reply_to_message_id", replyToMessageID),
+			zap.Error(err))
+		// If no mapping found, silently ignore (guest might be replying to a message that wasn't forwarded)
+		return nil
+	}
+
+	if len(mappings) == 0 {
+		s.logger.Debug("No message mappings found for guest reply",
+			zap.String("bot_id", s.botID.String()),
+			zap.Int64("guest_chat_id", chatID),
+			zap.Int64("reply_to_message_id", replyToMessageID))
+		return nil
+	}
+
+	s.logger.Debug("Found message mappings for guest reply",
+		zap.String("bot_id", s.botID.String()),
+		zap.Int64("guest_chat_id", chatID),
+		zap.Int64("reply_to_message_id", replyToMessageID),
+		zap.Int("mapping_count", len(mappings)))
+
+	// Forward reply to all corresponding recipients
+	for _, mapping := range mappings {
+		s.logger.Debug("Forwarding guest reply to recipient",
 			zap.String("bot_id", s.botID.String()),
 			zap.Int64("message_id", messageID),
-			zap.Error(err))
-	} else {
-		s.logger.Debug("Reply forwarded to guest successfully",
-			zap.String("bot_id", s.botID.String()),
-			zap.Int64("message_id", messageID))
+			zap.Int64("recipient_chat_id", mapping.RecipientChatID))
+
+		err := s.messageForwarder.ForwardGuestReplyToRecipient(
+			ctx,
+			b,
+			s.botID,
+			chatID,
+			messageID,
+			replyToMessageID,
+			mapping.RecipientChatID,
+		)
+
+		if err != nil {
+			s.logger.Warn("Failed to forward guest reply to recipient",
+				zap.String("bot_id", s.botID.String()),
+				zap.Int64("recipient_chat_id", mapping.RecipientChatID),
+				zap.Error(err))
+		} else {
+			s.logger.Debug("Guest reply forwarded to recipient successfully",
+				zap.String("bot_id", s.botID.String()),
+				zap.Int64("recipient_chat_id", mapping.RecipientChatID))
+		}
 	}
-	return err
+
+	return nil
 }
 
 func (s *Service) HandleCommand(ctx context.Context, b *gotgbot.Bot, update *ext.Context) error {
