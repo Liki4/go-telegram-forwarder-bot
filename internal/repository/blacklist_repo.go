@@ -11,8 +11,11 @@ type BlacklistRepository interface {
 	Create(blacklist *models.Blacklist) error
 	GetByID(id uuid.UUID) (*models.Blacklist, error)
 	GetByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) (*models.Blacklist, error)
+	GetAllByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) ([]*models.Blacklist, error)
 	GetActiveByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) (*models.Blacklist, error)
 	GetPendingByBotID(botID uuid.UUID) ([]*models.Blacklist, error)
+	GetPendingOrApprovedBanByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) (*models.Blacklist, error)
+	GetLatestApprovedUnbanByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) (*models.Blacklist, error)
 	Update(blacklist *models.Blacklist) error
 	ApprovePending(id uuid.UUID) error
 	RejectPending(id uuid.UUID) error
@@ -48,10 +51,39 @@ func (r *blacklistRepository) GetByBotIDAndGuestID(botID uuid.UUID, guestID uuid
 	return &blacklist, nil
 }
 
+func (r *blacklistRepository) GetAllByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) ([]*models.Blacklist, error) {
+	var blacklists []*models.Blacklist
+	if err := r.db.Where("bot_id = ? AND guest_id = ? AND deleted_at IS NULL", botID, guestID).
+		Order("created_at DESC").Find(&blacklists).Error; err != nil {
+		return nil, err
+	}
+	return blacklists, nil
+}
+
 func (r *blacklistRepository) GetActiveByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) (*models.Blacklist, error) {
 	var blacklist models.Blacklist
 	if err := r.db.Where("bot_id = ? AND guest_id = ? AND status = ? AND deleted_at IS NULL",
 		botID, guestID, models.BlacklistStatusApproved).
+		Order("created_at DESC").First(&blacklist).Error; err != nil {
+		return nil, err
+	}
+	return &blacklist, nil
+}
+
+func (r *blacklistRepository) GetPendingOrApprovedBanByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) (*models.Blacklist, error) {
+	var blacklist models.Blacklist
+	if err := r.db.Where("bot_id = ? AND guest_id = ? AND request_type = ? AND status IN ? AND deleted_at IS NULL",
+		botID, guestID, models.BlacklistRequestTypeBan, []models.BlacklistStatus{models.BlacklistStatusPending, models.BlacklistStatusApproved}).
+		Order("created_at DESC").First(&blacklist).Error; err != nil {
+		return nil, err
+	}
+	return &blacklist, nil
+}
+
+func (r *blacklistRepository) GetLatestApprovedUnbanByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) (*models.Blacklist, error) {
+	var blacklist models.Blacklist
+	if err := r.db.Where("bot_id = ? AND guest_id = ? AND request_type = ? AND status = ? AND deleted_at IS NULL",
+		botID, guestID, models.BlacklistRequestTypeUnban, models.BlacklistStatusApproved).
 		Order("created_at DESC").First(&blacklist).Error; err != nil {
 		return nil, err
 	}

@@ -5,9 +5,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
 	"go-telegram-forwarder-bot/internal/models"
 	"go-telegram-forwarder-bot/internal/repository"
+
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -33,18 +34,73 @@ func NewService(
 func (s *Service) IsBlacklisted(botID uuid.UUID, guestUserID int64) (bool, error) {
 	guest, err := s.guestRepo.GetByBotIDAndUserID(botID, guestUserID)
 	if err != nil {
-		return false, err
-	}
-
-	blacklist, err := s.blacklistRepo.GetActiveByBotIDAndGuestID(botID, guest.ID)
-	if err != nil {
+		// If guest doesn't exist, they are not blacklisted
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return false, nil
 		}
 		return false, err
 	}
 
-	return blacklist != nil && blacklist.Status == models.BlacklistStatusApproved, nil
+	// Get all blacklist records for this guest, ordered by created_at DESC
+	allBlacklists, err := s.blacklistRepo.GetAllByBotIDAndGuestID(botID, guest.ID)
+	if err != nil {
+		return false, err
+	}
+
+	// If no blacklist records exist, user is not blacklisted
+	if len(allBlacklists) == 0 {
+		return false, nil
+	}
+
+	// Find the latest approved unban and the latest active ban (approved or pending)
+	// The logic: if there's an approved unban that is newer than any active ban, user is not blacklisted
+	var latestApprovedUnban *models.Blacklist
+	var latestActiveBan *models.Blacklist
+
+	for _, bl := range allBlacklists {
+		// Check for approved unban
+		if bl.RequestType == models.BlacklistRequestTypeUnban &&
+			bl.Status == models.BlacklistStatusApproved {
+			if latestApprovedUnban == nil || bl.CreatedAt.After(latestApprovedUnban.CreatedAt) {
+				latestApprovedUnban = bl
+			}
+		}
+
+		// Check for active ban (approved or pending)
+		if bl.RequestType == models.BlacklistRequestTypeBan &&
+			(bl.Status == models.BlacklistStatusApproved || bl.Status == models.BlacklistStatusPending) {
+			if latestActiveBan == nil || bl.CreatedAt.After(latestActiveBan.CreatedAt) {
+				latestActiveBan = bl
+			}
+		}
+	}
+
+	// If there's an approved unban and it's newer than any active ban, user is not blacklisted
+	if latestApprovedUnban != nil {
+		if latestActiveBan == nil || latestApprovedUnban.CreatedAt.After(latestActiveBan.CreatedAt) {
+			s.logger.Debug("User is not blacklisted due to approved unban",
+				zap.String("bot_id", botID.String()),
+				zap.String("guest_id", guest.ID.String()),
+				zap.Time("unban_created_at", latestApprovedUnban.CreatedAt))
+			return false, nil
+		}
+	}
+
+	// If there's an active ban, user is blacklisted
+	if latestActiveBan != nil {
+		s.logger.Debug("User is blacklisted due to active ban",
+			zap.String("bot_id", botID.String()),
+			zap.String("guest_id", guest.ID.String()),
+			zap.String("ban_status", string(latestActiveBan.Status)),
+			zap.Time("ban_created_at", latestActiveBan.CreatedAt))
+		return true, nil
+	}
+
+	// No active ban found, user is not blacklisted
+	s.logger.Debug("User is not blacklisted",
+		zap.String("bot_id", botID.String()),
+		zap.String("guest_id", guest.ID.String()))
+	return false, nil
 }
 
 func (s *Service) CreateBanRequest(
