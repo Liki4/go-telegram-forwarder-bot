@@ -34,6 +34,38 @@ func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.
 		return err
 	}
 
+	// Send "please wait" message first
+	waitMsg, err := b.SendMessage(update.EffectiveChat.Id,
+		"⏳ Processing, please wait...", nil)
+	if err != nil {
+		s.logger.Warn("Failed to send wait message", zap.Error(err))
+		// Continue anyway, but we won't be able to update the message
+	}
+	var waitMessageID int64
+	if waitMsg != nil {
+		waitMessageID = waitMsg.MessageId
+		s.logger.Debug("Wait message sent",
+			zap.Int64("user_id", userID),
+			zap.Int64("message_id", waitMessageID))
+	}
+
+	// Helper function to update wait message
+	updateWaitMessage := func(text string) {
+		if waitMessageID > 0 {
+			_, _, editErr := b.EditMessageText(text, &gotgbot.EditMessageTextOpts{
+				ChatId:    update.EffectiveChat.Id,
+				MessageId: waitMessageID,
+				ParseMode: "Markdown",
+			})
+			if editErr != nil {
+				s.logger.Warn("Failed to update wait message",
+					zap.Int64("user_id", userID),
+					zap.Int64("message_id", waitMessageID),
+					zap.Error(editErr))
+			}
+		}
+	}
+
 	token := parts[1]
 	tokenPrefix := token
 	if len(token) > 10 {
@@ -81,8 +113,7 @@ func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.
 		s.logger.Debug("Failed to create bot instance for validation",
 			zap.Int64("user_id", userID),
 			zap.Error(err))
-		_, err := b.SendMessage(update.EffectiveChat.Id,
-			fmt.Sprintf("Invalid bot token: %v", err), nil)
+		updateWaitMessage(fmt.Sprintf("❌ Invalid bot token: `%v`", utils.EscapeMarkdown(fmt.Sprintf("%v", err))))
 		return err
 	}
 
@@ -93,8 +124,7 @@ func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.
 		s.logger.Debug("Failed to verify bot token via GetMe",
 			zap.Int64("user_id", userID),
 			zap.Error(err))
-		_, err := b.SendMessage(update.EffectiveChat.Id,
-			fmt.Sprintf("Failed to verify bot token: %v", err), nil)
+		updateWaitMessage(fmt.Sprintf("❌ Failed to verify bot token: `%s`", utils.EscapeMarkdown(fmt.Sprintf("%v", err))))
 		return err
 	}
 
@@ -119,8 +149,7 @@ func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.
 		usernamePtr)
 	if err != nil {
 		s.logger.Error("Failed to get or create user", zap.Error(err))
-		_, err := b.SendMessage(update.EffectiveChat.Id,
-			"An error occurred. Please try again later.", nil)
+		updateWaitMessage("❌ An error occurred. Please try again later.")
 		return err
 	}
 	s.logger.Debug("User retrieved/created",
@@ -146,9 +175,8 @@ func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.
 					zap.Int64("user_id", userID),
 					zap.String("bot_username", botInfo.Username),
 					zap.String("existing_bot_id", existingBot.ID.String()))
-				_, err := b.SendMessage(update.EffectiveChat.Id,
-					"This bot is already registered.", nil)
-				return err
+				updateWaitMessage(fmt.Sprintf("❌ Bot @%s is already registered.", utils.EscapeMarkdown(botInfo.Username)))
+				return fmt.Errorf("bot already exists")
 			}
 		}
 		s.logger.Debug("No duplicate bot found",
@@ -167,8 +195,7 @@ func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.
 	encryptedToken, err := utils.EncryptToken(token, s.encryptionKey)
 	if err != nil {
 		s.logger.Error("Failed to encrypt token", zap.Error(err))
-		_, err := b.SendMessage(update.EffectiveChat.Id,
-			"An error occurred. Please try again later.", nil)
+		updateWaitMessage("❌ An error occurred. Please try again later.")
 		return err
 	}
 	s.logger.Debug("Bot token encrypted successfully",
@@ -190,8 +217,7 @@ func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.
 
 	if err := s.botRepo.Create(forwarderBot); err != nil {
 		s.logger.Error("Failed to create bot", zap.Error(err))
-		_, err := b.SendMessage(update.EffectiveChat.Id,
-			"Failed to register bot. Please try again later.", nil)
+		updateWaitMessage("❌ Failed to register bot. Please try again later.")
 		return err
 	}
 
@@ -199,6 +225,40 @@ func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.
 		zap.Int64("user_id", userID),
 		zap.String("bot_id", forwarderBot.ID.String()),
 		zap.String("bot_username", forwarderBot.Name))
+
+	// Add manager as recipient automatically
+	s.logger.Debug("Adding manager as recipient",
+		zap.Int64("user_id", userID),
+		zap.String("bot_id", forwarderBot.ID.String()),
+		zap.Int64("manager_telegram_user_id", user.TelegramUserID))
+
+	// Check if recipient already exists
+	existingRecipient, err := s.recipientRepo.GetByBotIDAndChatID(forwarderBot.ID, user.TelegramUserID)
+	if err == nil && existingRecipient != nil {
+		s.logger.Debug("Manager is already a recipient, skipping",
+			zap.Int64("user_id", userID),
+			zap.String("bot_id", forwarderBot.ID.String()))
+	} else {
+		// Create recipient for manager
+		recipient := &models.Recipient{
+			BotID:         forwarderBot.ID,
+			RecipientType: models.RecipientTypeUser,
+			ChatID:        user.TelegramUserID,
+		}
+
+		if err := s.recipientRepo.Create(recipient); err != nil {
+			s.logger.Warn("Failed to add manager as recipient",
+				zap.Int64("user_id", userID),
+				zap.String("bot_id", forwarderBot.ID.String()),
+				zap.Error(err))
+			// Don't fail the entire operation if recipient creation fails
+		} else {
+			s.logger.Debug("Manager added as recipient successfully",
+				zap.Int64("user_id", userID),
+				zap.String("bot_id", forwarderBot.ID.String()),
+				zap.String("recipient_id", recipient.ID.String()))
+		}
+	}
 
 	// Log audit
 	s.logger.Debug("Creating audit log for bot addition",
@@ -232,10 +292,7 @@ func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.
 				zap.String("bot_id", forwarderBot.ID.String()),
 				zap.Error(startErr))
 			// Continue anyway - bot will be started on next restart
-			_, _ = b.SendMessage(update.EffectiveChat.Id,
-				fmt.Sprintf("Bot @%s has been registered, but failed to start immediately. It will be started on next application restart.", utils.EscapeMarkdown(forwarderBot.Name)), &gotgbot.SendMessageOpts{
-					ParseMode: "Markdown",
-				})
+			updateWaitMessage(fmt.Sprintf("⚠️ Bot @%s has been registered, but failed to start immediately. It will be started on next application restart.", utils.EscapeMarkdown(forwarderBot.Name)))
 			return startErr
 		}
 		s.logger.Debug("ForwarderBot started successfully",
@@ -248,23 +305,14 @@ func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.
 			zap.String("bot_id", forwarderBot.ID.String()))
 	}
 
-	s.logger.Debug("Sending success message to user",
+	s.logger.Debug("Updating wait message to success message",
 		zap.Int64("user_id", userID),
 		zap.String("bot_username", forwarderBot.Name))
-	_, err = b.SendMessage(update.EffectiveChat.Id,
-		fmt.Sprintf("Bot @%s has been successfully registered and started!", utils.EscapeMarkdown(forwarderBot.Name)), &gotgbot.SendMessageOpts{
-			ParseMode: "Markdown",
-		})
-	if err != nil {
-		s.logger.Debug("Failed to send success message",
-			zap.Int64("user_id", userID),
-			zap.Error(err))
-	} else {
-		s.logger.Debug("Success message sent",
-			zap.Int64("user_id", userID),
-			zap.String("bot_username", forwarderBot.Name))
-	}
-	return err
+	updateWaitMessage(fmt.Sprintf("✅ Bot @%s has been successfully registered and started!", utils.EscapeMarkdown(forwarderBot.Name)))
+	s.logger.Debug("Success message updated",
+		zap.Int64("user_id", userID),
+		zap.String("bot_username", forwarderBot.Name))
+	return nil
 }
 
 func (s *Service) handleMyBots(ctx context.Context, b *gotgbot.Bot, update *ext.Context) error {

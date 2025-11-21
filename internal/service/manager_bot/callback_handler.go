@@ -65,6 +65,8 @@ func (s *Service) handleManageCallback(ctx context.Context, b *gotgbot.Bot, upda
 }
 
 func (s *Service) handleBotCallback(ctx context.Context, b *gotgbot.Bot, update *ext.Context, parts []string) error {
+	userID := update.EffectiveUser.Id
+
 	if len(parts) < 2 {
 		_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
 			Text: "Invalid callback data",
@@ -81,6 +83,31 @@ func (s *Service) handleBotCallback(ctx context.Context, b *gotgbot.Bot, update 
 		return err
 	}
 
+	// Check permissions for bot operations
+	// Superusers have all permissions, so check that first
+	isSuperuser := s.IsSuperuser(userID)
+	if !isSuperuser {
+		// For non-superusers, check if they are the bot's manager
+		isManager, err := s.IsBotManager(userID, botID)
+		if err != nil {
+			s.logger.Warn("Failed to check bot manager status", zap.Error(err))
+			_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+				Text: "Failed to verify permissions",
+			})
+			return err
+		}
+		if !isManager {
+			s.logger.Debug("Access denied for bot callback",
+				zap.Int64("user_id", userID),
+				zap.String("bot_id", botID.String()),
+				zap.String("action", action))
+			_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+				Text: "You are not authorized to access this bot.",
+			})
+			return err
+		}
+	}
+
 	switch action {
 	case "view":
 		return s.handleViewBot(ctx, b, update, botID)
@@ -95,6 +122,8 @@ func (s *Service) handleBotCallback(ctx context.Context, b *gotgbot.Bot, update 
 }
 
 func (s *Service) handleDeleteBotCallback(ctx context.Context, b *gotgbot.Bot, update *ext.Context, parts []string) error {
+	userID := update.EffectiveUser.Id
+
 	if len(parts) < 2 {
 		return fmt.Errorf("invalid callback data")
 	}
@@ -106,6 +135,29 @@ func (s *Service) handleDeleteBotCallback(ctx context.Context, b *gotgbot.Bot, u
 			Text: "Invalid bot ID",
 		})
 		return err
+	}
+
+	// Check permissions: Superusers have all permissions, so check that first
+	isSuperuser := s.IsSuperuser(userID)
+	if !isSuperuser {
+		// For non-superusers, check if they are the bot's manager
+		isManager, err := s.IsBotManager(userID, botID)
+		if err != nil {
+			s.logger.Warn("Failed to check bot manager status", zap.Error(err))
+			_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+				Text: "Failed to verify permissions",
+			})
+			return err
+		}
+		if !isManager {
+			s.logger.Debug("Access denied for delete bot",
+				zap.Int64("user_id", userID),
+				zap.String("bot_id", botID.String()))
+			_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+				Text: "You are not authorized to delete this bot.",
+			})
+			return err
+		}
 	}
 
 	switch action {
@@ -205,6 +257,18 @@ func (s *Service) executeDeleteBot(ctx context.Context, b *gotgbot.Bot, update *
 }
 
 func (s *Service) handleManageMenu(ctx context.Context, b *gotgbot.Bot, update *ext.Context) error {
+	userID := update.EffectiveUser.Id
+
+	// Only superusers can access this
+	if !s.IsSuperuser(userID) {
+		s.logger.Debug("Access denied for manage menu",
+			zap.Int64("user_id", userID))
+		_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "You are not authorized to access this.",
+		})
+		return err
+	}
+
 	// Answer callback query first
 	_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{})
 	if err != nil {
@@ -248,6 +312,18 @@ func (s *Service) handleManageMenu(ctx context.Context, b *gotgbot.Bot, update *
 }
 
 func (s *Service) handleAllBots(ctx context.Context, b *gotgbot.Bot, update *ext.Context) error {
+	userID := update.EffectiveUser.Id
+
+	// Only superusers can access this
+	if !s.IsSuperuser(userID) {
+		s.logger.Debug("Access denied for all_bots",
+			zap.Int64("user_id", userID))
+		_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "You are not authorized to access this.",
+		})
+		return err
+	}
+
 	// Answer callback query first
 	_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{})
 	if err != nil {
@@ -519,6 +595,33 @@ func (s *Service) handleViewManager(ctx context.Context, b *gotgbot.Bot, update 
 }
 
 func (s *Service) handleViewBot(ctx context.Context, b *gotgbot.Bot, update *ext.Context, botID uuid.UUID) error {
+	userID := update.EffectiveUser.Id
+
+	// Check permissions: Superusers have all permissions, so check that first
+	isSuperuser := s.IsSuperuser(userID)
+	var isManager bool
+	if !isSuperuser {
+		// For non-superusers, check if they are the bot's manager
+		var err error
+		isManager, err = s.IsBotManager(userID, botID)
+		if err != nil {
+			s.logger.Warn("Failed to check bot manager status", zap.Error(err))
+			_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+				Text: "Failed to verify permissions",
+			})
+			return err
+		}
+		if !isManager {
+			s.logger.Debug("Access denied for bot view",
+				zap.Int64("user_id", userID),
+				zap.String("bot_id", botID.String()))
+			_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+				Text: "You are not authorized to view this bot.",
+			})
+			return err
+		}
+	}
+
 	// Answer callback query first
 	_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{})
 	if err != nil {
@@ -560,20 +663,32 @@ func (s *Service) handleViewBot(ctx context.Context, b *gotgbot.Bot, update *ext
 		)
 	}
 
-	buttons := [][]gotgbot.InlineKeyboardButton{
-		{
+	// Only show Delete Bot button if user is the manager or superuser
+	buttons := [][]gotgbot.InlineKeyboardButton{}
+	if isManager || isSuperuser {
+		buttons = append(buttons, []gotgbot.InlineKeyboardButton{
 			{
 				Text:         "Delete Bot",
 				CallbackData: fmt.Sprintf("delete_bot:confirm:%s", botID.String()),
 			},
-		},
-		{
-			{
-				Text:         "Back",
-				CallbackData: "manage:all_bots",
-			},
-		},
+		})
 	}
+
+	// Back button behavior depends on user role
+	var backCallbackData string
+	if isSuperuser {
+		// Superuser: back to manage:all_bots
+		backCallbackData = "manage:all_bots"
+	} else {
+		// Regular manager: back to mybots list
+		backCallbackData = "mybots:list"
+	}
+	buttons = append(buttons, []gotgbot.InlineKeyboardButton{
+		{
+			Text:         "Back",
+			CallbackData: backCallbackData,
+		},
+	})
 
 	messageID, err := getMessageIDFromCallback(update.CallbackQuery.Message)
 	if err != nil {
@@ -598,6 +713,96 @@ func (s *Service) handleViewBot(ctx context.Context, b *gotgbot.Bot, update *ext
 		// Try to send a new message if edit fails
 		_, sendErr := b.SendMessage(update.EffectiveChat.Id, message, &gotgbot.SendMessageOpts{
 			ParseMode:   "Markdown",
+			ReplyMarkup: keyboard,
+		})
+		return sendErr
+	}
+	return nil
+}
+
+func (s *Service) handleMyBotsCallback(ctx context.Context, b *gotgbot.Bot, update *ext.Context) error {
+	userID := update.EffectiveUser.Id
+
+	// Answer callback query first
+	_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{})
+	if err != nil {
+		s.logger.Warn("Failed to answer callback query", zap.Error(err))
+	}
+
+	// Get or create user
+	username := update.EffectiveUser.Username
+	var usernamePtr *string
+	if username != "" {
+		usernamePtr = &username
+	}
+
+	user, err := s.userRepo.GetOrCreateByTelegramUserID(userID, usernamePtr)
+	if err != nil {
+		s.logger.Error("Failed to get or create user", zap.Error(err))
+		_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "An error occurred. Please try again later.",
+		})
+		return err
+	}
+
+	bots, err := s.botRepo.GetByManagerID(user.ID)
+	if err != nil {
+		s.logger.Error("Failed to get bots", zap.Error(err))
+		_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "An error occurred. Please try again later.",
+		})
+		return err
+	}
+
+	if len(bots) == 0 {
+		messageID, err := getMessageIDFromCallback(update.CallbackQuery.Message)
+		if err != nil {
+			s.logger.Warn("Failed to get message ID from callback", zap.Error(err))
+			_, err := b.SendMessage(update.EffectiveChat.Id,
+				"You don't have any bots registered. Use /addbot to register one.", nil)
+			return err
+		}
+		_, _, err = b.EditMessageText("You don't have any bots registered. Use /addbot to register one.",
+			&gotgbot.EditMessageTextOpts{
+				ChatId:    update.EffectiveChat.Id,
+				MessageId: messageID,
+			})
+		return err
+	}
+
+	var buttons [][]gotgbot.InlineKeyboardButton
+	for _, bot := range bots {
+		buttons = append(buttons, []gotgbot.InlineKeyboardButton{
+			{
+				Text:         fmt.Sprintf("@%s", bot.Name),
+				CallbackData: fmt.Sprintf("bot:view:%s", bot.ID.String()),
+			},
+		})
+	}
+
+	// No Back button for /mybots list - it's the root level for managers
+
+	messageID, err := getMessageIDFromCallback(update.CallbackQuery.Message)
+	if err != nil {
+		s.logger.Warn("Failed to get message ID from callback", zap.Error(err))
+		// Try to send a new message if we can't get message ID
+		keyboard := gotgbot.InlineKeyboardMarkup{InlineKeyboard: buttons}
+		_, sendErr := b.SendMessage(update.EffectiveChat.Id, "Select a bot to manage:", &gotgbot.SendMessageOpts{
+			ReplyMarkup: keyboard,
+		})
+		return sendErr
+	}
+	keyboard := gotgbot.InlineKeyboardMarkup{InlineKeyboard: buttons}
+	_, _, err = b.EditMessageText("Select a bot to manage:",
+		&gotgbot.EditMessageTextOpts{
+			ChatId:      update.EffectiveChat.Id,
+			MessageId:   messageID,
+			ReplyMarkup: keyboard,
+		})
+	if err != nil {
+		s.logger.Error("Failed to edit message", zap.Error(err))
+		// Try to send a new message if edit fails
+		_, sendErr := b.SendMessage(update.EffectiveChat.Id, "Select a bot to manage:", &gotgbot.SendMessageOpts{
 			ReplyMarkup: keyboard,
 		})
 		return sendErr

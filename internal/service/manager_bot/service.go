@@ -12,6 +12,7 @@ import (
 
 	"github.com/PaulSonOfLars/gotgbot/v2"
 	"github.com/PaulSonOfLars/gotgbot/v2/ext"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -25,6 +26,7 @@ type Service struct {
 	botRepo       repository.BotRepository
 	userRepo      repository.UserRepository
 	auditLogRepo  repository.AuditLogRepository
+	recipientRepo repository.RecipientRepository
 	statsService  *statistics.Service
 	config        *config.Config
 	logger        *zap.Logger
@@ -36,6 +38,7 @@ func NewService(
 	botRepo repository.BotRepository,
 	userRepo repository.UserRepository,
 	auditLogRepo repository.AuditLogRepository,
+	recipientRepo repository.RecipientRepository,
 	statsService *statistics.Service,
 	cfg *config.Config,
 	logger *zap.Logger,
@@ -49,6 +52,7 @@ func NewService(
 		botRepo:       botRepo,
 		userRepo:      userRepo,
 		auditLogRepo:  auditLogRepo,
+		recipientRepo: recipientRepo,
 		statsService:  statsService,
 		config:        cfg,
 		logger:        logger,
@@ -76,6 +80,40 @@ func (s *Service) IsSuperuser(userID int64) bool {
 	s.logger.Debug("User is not superuser",
 		zap.Int64("user_id", userID))
 	return false
+}
+
+// IsBotManager checks if a user is the manager of a specific bot
+func (s *Service) IsBotManager(userID int64, botID uuid.UUID) (bool, error) {
+	s.logger.Debug("Checking if user is bot manager",
+		zap.Int64("user_id", userID),
+		zap.String("bot_id", botID.String()))
+
+	bot, err := s.botRepo.GetByID(botID)
+	if err != nil {
+		s.logger.Debug("Failed to get bot for manager check",
+			zap.Int64("user_id", userID),
+			zap.String("bot_id", botID.String()),
+			zap.Error(err))
+		return false, err
+	}
+
+	user, err := s.userRepo.GetByTelegramUserID(userID)
+	if err != nil {
+		s.logger.Debug("Failed to get user for manager check",
+			zap.Int64("user_id", userID),
+			zap.String("bot_id", botID.String()),
+			zap.Error(err))
+		return false, err
+	}
+
+	isManager := user.ID == bot.ManagerID
+	s.logger.Debug("Bot manager check result",
+		zap.Int64("user_id", userID),
+		zap.String("bot_id", botID.String()),
+		zap.Bool("is_manager", isManager),
+		zap.String("user_uuid", user.ID.String()),
+		zap.String("bot_manager_uuid", bot.ManagerID.String()))
+	return isManager, nil
 }
 
 func (s *Service) HandleCommand(ctx context.Context, b *gotgbot.Bot, update *ext.Context) error {
@@ -211,6 +249,15 @@ func (s *Service) HandleCallback(ctx context.Context, b *gotgbot.Bot, update *ex
 	var err error
 	switch action {
 	case "manage":
+		// Only superusers can access manage callbacks
+		if !s.IsSuperuser(userID) {
+			s.logger.Debug("Access denied for manage callback",
+				zap.Int64("user_id", userID))
+			_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+				Text: "You are not authorized to access this.",
+			})
+			return err
+		}
 		s.logger.Debug("Handling manage callback",
 			zap.Int64("user_id", userID),
 			zap.Strings("sub_parts", parts[1:]))
@@ -221,6 +268,15 @@ func (s *Service) HandleCallback(ctx context.Context, b *gotgbot.Bot, update *ex
 			zap.Strings("sub_parts", parts[1:]))
 		err = s.handleBotCallback(ctx, b, update, parts[1:])
 	case "manager":
+		// Only superusers can access manager callbacks
+		if !s.IsSuperuser(userID) {
+			s.logger.Debug("Access denied for manager callback",
+				zap.Int64("user_id", userID))
+			_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+				Text: "You are not authorized to access this.",
+			})
+			return err
+		}
 		s.logger.Debug("Handling manager callback",
 			zap.Int64("user_id", userID),
 			zap.Strings("sub_parts", parts[1:]))
@@ -230,6 +286,23 @@ func (s *Service) HandleCallback(ctx context.Context, b *gotgbot.Bot, update *ex
 			zap.Int64("user_id", userID),
 			zap.Strings("sub_parts", parts[1:]))
 		err = s.handleDeleteBotCallback(ctx, b, update, parts[1:])
+	case "mybots":
+		// Handle mybots callback to return to /mybots list
+		// Only allow "list" action for now
+		if len(parts) > 1 && parts[1] == "list" {
+			s.logger.Debug("Handling mybots callback",
+				zap.Int64("user_id", userID),
+				zap.Strings("sub_parts", parts[1:]))
+			err = s.handleMyBotsCallback(ctx, b, update)
+		} else {
+			s.logger.Debug("Invalid mybots callback",
+				zap.Int64("user_id", userID),
+				zap.Strings("parts", parts))
+			_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+				Text: "Invalid callback data",
+			})
+			return err
+		}
 	default:
 		s.logger.Debug("Unknown callback action",
 			zap.Int64("user_id", userID),
