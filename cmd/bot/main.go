@@ -81,6 +81,7 @@ func main() {
 	recipientRepo := repository.NewRecipientRepository(db)
 	guestRepo := repository.NewGuestRepository(db)
 	blacklistRepo := repository.NewBlacklistRepository(db)
+	blacklistApprovalMessageRepo := repository.NewBlacklistApprovalMessageRepository(db)
 	botAdminRepo := repository.NewBotAdminRepository(db)
 	messageMappingRepo := repository.NewMessageMappingRepository(db)
 	auditLogRepo := repository.NewAuditLogRepository(db)
@@ -125,6 +126,7 @@ func main() {
 		botRepo,
 		userRepo,
 		auditLogRepo,
+		recipientRepo,
 		statsService,
 		cfg,
 		log,
@@ -161,6 +163,7 @@ func main() {
 		recipientRepo,
 		guestRepo,
 		blacklistRepo,
+		blacklistApprovalMessageRepo,
 		botAdminRepo,
 		messageMappingRepo,
 		userRepo,

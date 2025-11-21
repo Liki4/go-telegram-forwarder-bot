@@ -19,28 +19,29 @@ import (
 
 // BotManager manages the lifecycle of all ForwarderBot instances
 type BotManager struct {
-	bots              map[uuid.UUID]*ForwarderBot
-	mu                sync.RWMutex
-	ctx               context.Context
-	botRepo           repository.BotRepository
-	recipientRepo     repository.RecipientRepository
-	guestRepo         repository.GuestRepository
-	blacklistRepo     repository.BlacklistRepository
-	botAdminRepo      repository.BotAdminRepository
-	messageMappingRepo repository.MessageMappingRepository
-	userRepo          repository.UserRepository
-	auditLogRepo      repository.AuditLogRepository
-	blacklistService  *blacklist.Service
-	statsService      *statistics.Service
-	groupMonitor      *service.GroupMonitor
-	rateLimiter       *message.RateLimiter
-	retryHandler      *message.RetryHandler
-	errorNotifier     *service.ErrorNotifier
-	managerNotifier   *service.ManagerNotifier
-	config            *config.Config
-	logger            *zap.Logger
-	encryptionKey     []byte
-	wg                sync.WaitGroup
+	bots                        map[uuid.UUID]*ForwarderBot
+	mu                          sync.RWMutex
+	ctx                         context.Context
+	botRepo                     repository.BotRepository
+	recipientRepo               repository.RecipientRepository
+	guestRepo                   repository.GuestRepository
+	blacklistRepo               repository.BlacklistRepository
+	blacklistApprovalMessageRepo repository.BlacklistApprovalMessageRepository
+	botAdminRepo                repository.BotAdminRepository
+	messageMappingRepo          repository.MessageMappingRepository
+	userRepo                    repository.UserRepository
+	auditLogRepo                repository.AuditLogRepository
+	blacklistService            *blacklist.Service
+	statsService                *statistics.Service
+	groupMonitor                *service.GroupMonitor
+	rateLimiter                 *message.RateLimiter
+	retryHandler                *message.RetryHandler
+	errorNotifier               *service.ErrorNotifier
+	managerNotifier             *service.ManagerNotifier
+	config                      *config.Config
+	logger                      *zap.Logger
+	encryptionKey               []byte
+	wg                          sync.WaitGroup
 }
 
 // NewBotManager creates a new BotManager instance
@@ -50,6 +51,7 @@ func NewBotManager(
 	recipientRepo repository.RecipientRepository,
 	guestRepo repository.GuestRepository,
 	blacklistRepo repository.BlacklistRepository,
+	blacklistApprovalMessageRepo repository.BlacklistApprovalMessageRepository,
 	botAdminRepo repository.BotAdminRepository,
 	messageMappingRepo repository.MessageMappingRepository,
 	userRepo repository.UserRepository,
@@ -70,26 +72,27 @@ func NewBotManager(
 	}
 
 	return &BotManager{
-		bots:               make(map[uuid.UUID]*ForwarderBot),
-		ctx:                ctx,
-		botRepo:            botRepo,
-		recipientRepo:      recipientRepo,
-		guestRepo:          guestRepo,
-		blacklistRepo:      blacklistRepo,
-		botAdminRepo:       botAdminRepo,
-		messageMappingRepo: messageMappingRepo,
-		userRepo:           userRepo,
-		auditLogRepo:       auditLogRepo,
-		blacklistService:   blacklistService,
-		statsService:       statsService,
-		groupMonitor:       groupMonitor,
-		rateLimiter:        rateLimiter,
-		retryHandler:       retryHandler,
-		errorNotifier:      errorNotifier,
-		managerNotifier:    managerNotifier,
-		config:             cfg,
-		logger:             logger,
-		encryptionKey:       encryptionKey,
+		bots:                        make(map[uuid.UUID]*ForwarderBot),
+		ctx:                         ctx,
+		botRepo:                     botRepo,
+		recipientRepo:               recipientRepo,
+		guestRepo:                   guestRepo,
+		blacklistRepo:               blacklistRepo,
+		blacklistApprovalMessageRepo: blacklistApprovalMessageRepo,
+		botAdminRepo:                botAdminRepo,
+		messageMappingRepo:          messageMappingRepo,
+		userRepo:                    userRepo,
+		auditLogRepo:                auditLogRepo,
+		blacklistService:            blacklistService,
+		statsService:                statsService,
+		groupMonitor:                groupMonitor,
+		rateLimiter:                 rateLimiter,
+		retryHandler:                retryHandler,
+		errorNotifier:               errorNotifier,
+		managerNotifier:             managerNotifier,
+		config:                      cfg,
+		logger:                      logger,
+		encryptionKey:               encryptionKey,
 	}, nil
 }
 
@@ -179,6 +182,7 @@ func (bm *BotManager) startBot(botID uuid.UUID) error {
 		bm.recipientRepo,
 		bm.guestRepo,
 		bm.blacklistRepo,
+		bm.blacklistApprovalMessageRepo,
 		bm.botAdminRepo,
 		bm.messageMappingRepo,
 		bm.userRepo,
