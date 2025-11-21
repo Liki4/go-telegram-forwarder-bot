@@ -7,8 +7,9 @@
 ### 核心功能
 - **双层架构**：ManagerBot 管理多个 ForwarderBot，ForwarderBot 执行实际的消息转发
 - **双向转发**：Guest → Recipients（入向），Recipients → Guest（出向）
+- **双向回复**：支持 Guest 和 Recipient 互相回复消息，实现完整的对话流程
 - **多级权限**：Superuser、Manager、Admin、Guest 四级权限体系
-- **黑名单管理**：支持审批流程，自动过期处理
+- **黑名单管理**：支持审批流程，多 Manager/Admin 协同审批，自动过期处理
 - **实时统计**：消息转发量、用户数等实时统计
 - **错误处理**：自动重试、失败通知、关键错误告警
 
@@ -23,6 +24,8 @@
 - **Proxy 支持**：支持 HTTP/HTTPS/SOCKS5 代理，适用于无法直接访问 Telegram API 的网络环境
 - **Markdown 安全**：自动转义用户输入中的 Markdown 特殊字符，防止格式错误
 - **详细日志**：完整的 debug 级别日志，记录所有操作和状态变化
+- **消息映射**：完整记录所有消息的映射关系，支持复杂的双向对话场景
+- **智能黑名单**：正确处理 ban/unban 组合，确保黑名单状态准确
 
 ## 🏗️ 系统架构
 
@@ -178,8 +181,8 @@ retry:
 
 log:
   level: "debug"          # debug, info, warn, error
-  output: "stdout"        # stdout, file
-  file_path: "bot.log"    # 日志文件路径
+  output: "stdout"        # stdout, file, both (both = 同时输出到控制台和文件)
+  file_path: "bot.log"    # 日志文件路径（当 output 为 file 或 both 时必需）
 
 environment: "development"  # development, production
 
@@ -207,6 +210,7 @@ proxy:
 - Token 会通过 Telegram API 验证
 - Token 会加密存储
 - Bot 添加成功后会自动启动，无需重启应用
+- Manager 会自动添加为该 Bot 的第一个 Recipient
 
 #### `/mybots`
 列出当前 Manager 管理的所有 ForwarderBot。
@@ -293,29 +297,63 @@ proxy:
 显示帮助信息，列出所有可用命令。
 
 **说明：**
-- 根据用户角色（Manager/Admin/Guest）显示相应的命令列表
+- 根据用户角色（Manager/Admin/Recipient/Guest）显示相应的命令列表
+- 纯 Guest（既不是 Manager/Admin，也不是 Recipient）只显示 `/help` 和 `/unban` 命令，不显示 `/ban` 命令
 
 #### `/ban`（需 Reply）
 将 Guest 加入黑名单。
 
 **使用方式：**
-1. Reply 一条 Guest 发送的消息
+1. Reply 一条 Guest 发送的消息（在 Recipient 端）
 2. 发送 `/ban` 命令
-3. Manager 会收到审批请求
-4. Manager 点击 Approve/Reject 按钮
+3. Manager 和所有 Admin 会收到审批请求
+4. 任意 Manager 或 Admin 点击 Approve/Reject 按钮
+5. 所有收到审批请求的用户都会看到审批结果
 
 **说明：**
 - 如果 Recipient 是用户，该用户可以使用 `/ban`
 - 如果 Recipient 是群组，群组中所有用户都可以使用 `/ban`
+- 审批请求会发送给 Manager 和所有 Admin
+- 点击 Approve/Reject 后，执行操作的人会看到 "Approved"/"Rejected" 按钮，其他人会看到 "Approved by {执行者}"/"Rejected by {执行者}" 按钮
 - 审批超时 1 天后自动通过
+- Ban 请求在 Pending 状态即生效，无需等待审批
 
-#### `/unban`（需 Reply）
+#### `/unban`
 将 Guest 移出黑名单。
 
-**使用方式：**
-1. Reply 一条被 ban 的 Guest 的消息
+**使用方式（两种）：**
+
+**方式 1：管理员/Recipient 操作（需 Reply）**
+1. Reply 一条被 ban 的 Guest 的消息（在 Recipient 端）
 2. 发送 `/unban` 命令
-3. Manager 会收到审批请求
+3. Manager 和所有 Admin 会收到审批请求
+4. 任意 Manager 或 Admin 点击 Approve/Reject 按钮
+
+**方式 2：Guest 自请求（无需 Reply）**
+1. 被 ban 的 Guest 直接发送 `/unban` 命令（无需 reply）
+2. Manager 和所有 Admin 会收到自请求审批通知
+3. 审批超时 1 天后自动通过
+
+**说明：**
+- 审批请求会发送给 Manager 和所有 Admin
+- 点击 Approve/Reject 后，所有收到审批请求的用户都会看到审批结果
+- 审批超时 1 天后自动通过
+
+### 审批流程说明
+
+**审批请求发送：**
+- Ban/Unban 请求会同时发送给 Manager 和所有 Admin
+- 每个用户都会收到独立的审批消息，包含 Approve 和 Reject 按钮
+
+**审批结果展示：**
+- 执行操作的用户：消息会更新为只显示 "Approved" 或 "Rejected" 按钮
+- 其他收到审批请求的用户：消息会更新为显示 "Approved by {执行者用户名}" 或 "Rejected by {执行者用户名}" 按钮
+- 执行者信息优先显示用户名（如果有），否则显示用户 ID
+
+**审批状态：**
+- Ban 请求在 Pending 状态即生效，无需等待审批
+- Unban 请求需要 Approved 状态才生效
+- 系统会正确处理 ban/unban 组合，确保状态准确
 
 ## 🔄 消息转发流程
 
@@ -355,8 +393,34 @@ ForwarderBot 接收
     ↓
 转发回复给 Guest
     ↓
+存储回复映射（记录 bot 发送给 guest 的消息 ID）
+```
+
+### Guest 回复消息
+
+```
+Guest 回复消息
+    ↓
+ForwarderBot 接收
+    ↓
+检查黑名单 → 如果在黑名单，丢弃
+    ↓
+查找消息映射（通过 guest_message_id）
+    ↓
+找到所有对应的 recipient_chat_id
+    ↓
+并发转发给所有对应的 Recipients
+    ├─→ Recipient 1 (goroutine)
+    ├─→ Recipient 2 (goroutine)
+    └─→ Recipient 3 (goroutine)
+    ↓
 存储回复映射
 ```
+
+**说明：**
+- Guest 可以回复任何收到的消息
+- 系统会找到该消息对应的所有 Recipients
+- 如果消息被转发给多个 Recipients，Guest 的回复会发送给所有这些 Recipients
 
 ## 🧪 测试
 
@@ -400,16 +464,17 @@ go-telegram-forwarder-bot/
 │   │   ├── connection.go           # 数据库连接
 │   │   ├── migration.go            # 数据库迁移
 │   │   └── redis.go                # Redis 连接
-│   ├── models/                     # 数据模型（8个）
+│   ├── models/                     # 数据模型（9个）
 │   │   ├── user.go
 │   │   ├── forwarder_bot.go
 │   │   ├── recipient.go
 │   │   ├── guest.go
 │   │   ├── blacklist.go
+│   │   ├── blacklist_approval_message.go  # 审批消息映射
 │   │   ├── bot_admin.go
 │   │   ├── message_mapping.go
 │   │   └── audit_log.go
-│   ├── repository/                 # 数据访问层（8个）
+│   ├── repository/                 # 数据访问层（9个）
 │   │   └── *_repo.go
 │   ├── service/                    # 业务逻辑层
 │   │   ├── manager_bot/            # ManagerBot 服务
@@ -435,12 +500,14 @@ go-telegram-forwarder-bot/
 ## 🔒 安全特性
 
 1. **Token 加密**：Bot Token 使用 AES-256-GCM 加密存储
-2. **权限控制**：多级权限体系，操作需授权
+2. **权限控制**：多级权限体系，操作需授权，权限检查贯穿所有命令和回调
 3. **审计日志**：关键操作永久记录
 4. **错误通知**：关键错误自动通知 Superuser
 5. **限流保护**：防止 API 滥用和消息轰炸
 6. **Markdown 安全**：自动转义用户输入，防止 Markdown 注入和格式错误
 7. **输入验证**：所有用户输入都经过验证和清理
+8. **消息映射安全**：通过消息映射准确识别用户，防止误操作
+9. **黑名单逻辑**：正确处理 ban/unban 组合，确保状态准确
 
 ## 🐛 故障排除
 
@@ -500,6 +567,26 @@ go-telegram-forwarder-bot/
   curl -x http://127.0.0.1:7890 https://api.telegram.org
   ```
 - 查看日志中的 proxy 相关错误信息
+
+#### 6. Guest 回复找不到消息
+**问题**：Guest 回复消息时提示找不到对应的消息。
+
+**可能原因：**
+- 消息映射记录不完整
+- 回复的消息已被删除
+
+**解决方案：**
+- 系统会自动记录所有消息映射，包括 bot 发送给 guest 的消息 ID
+- 如果问题持续，检查数据库中的 `message_mappings` 表
+- 确保系统正常运行，不要手动删除消息映射记录
+
+#### 7. 黑名单状态不正确
+**问题**：用户被 ban 后 unban，但状态显示不正确。
+
+**解决方案：**
+- 系统已优化黑名单逻辑，正确处理 ban/unban 组合
+- 如果遇到问题，检查数据库中的 `blacklists` 表记录
+- 系统会查找最新的 approved unban 和 active ban 来判断当前状态
 
 ## 📝 开发指南
 
@@ -586,8 +673,20 @@ sudo systemctl start telegram-forwarder-bot
 
 ### 日志级别
 
-- **development**：DEBUG 级别，输出到控制台，记录所有操作细节
-- **production**：INFO 级别，输出到文件
+- **development**：DEBUG 级别，记录所有操作细节
+- **production**：INFO 级别
+
+### 日志输出模式
+
+支持三种输出模式：
+- **stdout**：仅输出到控制台（默认）
+- **file**：仅输出到文件
+- **both**：同时输出到控制台和文件
+
+**使用场景：**
+- `stdout`：开发环境，方便查看日志
+- `file`：生产环境，节省控制台输出
+- `both`：生产环境，既需要查看实时日志，又需要持久化存储
 
 ### 日志内容
 
