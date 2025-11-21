@@ -344,8 +344,19 @@ func (s *Service) handleStats(ctx context.Context, b *gotgbot.Bot, update *ext.C
 
 func (s *Service) handleHelp(ctx context.Context, b *gotgbot.Bot, update *ext.Context) error {
 	userID := update.EffectiveUser.Id
+	chatID := update.EffectiveChat.Id
 	isManager, _ := s.IsManager(userID)
 	isManagerOrAdmin, _ := s.IsManagerOrAdmin(userID)
+
+	// Check if user is a recipient
+	isRecipient := false
+	_, err := s.recipientRepo.GetByBotIDAndChatID(s.botID, chatID)
+	if err == nil {
+		isRecipient = true
+	}
+
+	// Determine if user is a pure guest (not manager, not admin, not recipient)
+	isPureGuest := !isManagerOrAdmin && !isRecipient
 
 	helpText := "*ForwarderBot Commands*\n\n"
 	helpText += "*/help* - Show this help message\n"
@@ -372,18 +383,27 @@ func (s *Service) handleHelp(ctx context.Context, b *gotgbot.Bot, update *ext.Co
 	}
 
 	helpText += "\n*Blacklist Management:*\n"
-	helpText += "*/ban* - Ban a guest (reply to their message)\n"
-	helpText += "*/unban* - Unban a guest (reply to their message)\n"
-	helpText += "\n*Note:* Ban/Unban commands can be used by:\n"
-	helpText += "- Manager and Admins\n"
-	helpText += "- Any user in a group recipient"
+	// Only show /ban command if user is not a pure guest
+	if !isPureGuest {
+		helpText += "*/ban* - Ban a guest (reply to their message)\n"
+	}
+	helpText += "*/unban* - Unban a guest (reply to their message, or use directly to request unban for yourself)\n"
+	
+	if !isPureGuest {
+		helpText += "\n*Note:*\n"
+		helpText += "- Ban command can be used by Manager, Admins, or any user in a group recipient\n"
+		helpText += "- Unban command: Reply to a message to unban someone else (requires permission), or use directly to request unban for yourself if you are blacklisted"
+	} else {
+		helpText += "\n*Note:*\n"
+		helpText += "- Unban command: Use directly to request unban for yourself if you are blacklisted"
+	}
 
 	helpText += "\n\n*How it works:*\n"
 	helpText += "1. Guests send messages to this bot\n"
 	helpText += "2. Messages are forwarded to all recipients\n"
 	helpText += "3. Recipients can reply to forward messages back to guests"
 
-	_, err := b.SendMessage(update.EffectiveChat.Id, helpText, &gotgbot.SendMessageOpts{
+	_, err = b.SendMessage(update.EffectiveChat.Id, helpText, &gotgbot.SendMessageOpts{
 		ParseMode: "Markdown",
 	})
 	return err
