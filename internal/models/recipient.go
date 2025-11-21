@@ -16,8 +16,8 @@ const (
 )
 
 type Recipient struct {
-	ID            uuid.UUID     `gorm:"type:uuid;primary_key"`
-	BotID         uuid.UUID     `gorm:"type:uuid;not null;index"`
+	ID            uuid.UUID     `gorm:"type:char(36);primary_key"`
+	BotID         uuid.UUID     `gorm:"type:char(36);not null;index"`
 	Bot           ForwarderBot  `gorm:"foreignKey:BotID"`
 	RecipientType RecipientType `gorm:"type:varchar(20);not null"`
 	ChatID        int64         `gorm:"not null"`

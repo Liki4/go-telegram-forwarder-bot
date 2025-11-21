@@ -8,10 +8,10 @@ import (
 )
 
 type BotAdmin struct {
-	ID          uuid.UUID    `gorm:"type:uuid;primary_key"`
-	BotID       uuid.UUID    `gorm:"type:uuid;not null;index"`
+	ID          uuid.UUID    `gorm:"type:char(36);primary_key"`
+	BotID       uuid.UUID    `gorm:"type:char(36);not null;index"`
 	Bot         ForwarderBot `gorm:"foreignKey:BotID"`
-	AdminUserID uuid.UUID    `gorm:"type:uuid;not null;index"`
+	AdminUserID uuid.UUID    `gorm:"type:char(36);not null;index"`
 	AdminUser   User         `gorm:"foreignKey:AdminUserID"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

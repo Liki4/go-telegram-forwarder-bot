@@ -8,7 +8,7 @@ import (
 )
 
 type User struct {
-	ID             uuid.UUID `gorm:"type:uuid;primary_key"`
+	ID             uuid.UUID `gorm:"type:char(36);primary_key"`
 	TelegramUserID int64     `gorm:"uniqueIndex;not null"`
 	Username       *string   `gorm:"type:varchar(255)"`
 	CreatedAt      time.Time

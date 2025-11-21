@@ -23,13 +23,13 @@ const (
 )
 
 type Blacklist struct {
-	ID            uuid.UUID            `gorm:"type:uuid;primary_key"`
-	BotID         uuid.UUID            `gorm:"type:uuid;not null;index"`
+	ID            uuid.UUID            `gorm:"type:char(36);primary_key"`
+	BotID         uuid.UUID            `gorm:"type:char(36);not null;index"`
 	Bot           ForwarderBot         `gorm:"foreignKey:BotID"`
-	GuestID       uuid.UUID            `gorm:"type:uuid;not null;index"`
+	GuestID       uuid.UUID            `gorm:"type:char(36);not null;index"`
 	Guest         Guest                `gorm:"foreignKey:GuestID"`
 	Status        BlacklistStatus      `gorm:"type:varchar(20);not null;default:'pending'"`
-	RequestUserID uuid.UUID            `gorm:"type:uuid;not null"`
+	RequestUserID uuid.UUID            `gorm:"type:char(36);not null"`
 	RequestUser   User                 `gorm:"foreignKey:RequestUserID"`
 	RequestType   BlacklistRequestType `gorm:"type:varchar(20);not null"`
 	ApprovedAt    *time.Time

@@ -15,8 +15,8 @@ const (
 )
 
 type MessageMapping struct {
-	ID                 uuid.UUID        `gorm:"type:uuid;primary_key"`
-	BotID              uuid.UUID        `gorm:"type:uuid;not null;index:idx_bot_created"`
+	ID                 uuid.UUID        `gorm:"type:char(36);primary_key"`
+	BotID              uuid.UUID        `gorm:"type:char(36);not null;index:idx_bot_created"`
 	Bot                ForwarderBot     `gorm:"foreignKey:BotID"`
 	GuestChatID        int64            `gorm:"not null;index:idx_guest_message"`
 	GuestMessageID     int64            `gorm:"not null;index:idx_guest_message"`

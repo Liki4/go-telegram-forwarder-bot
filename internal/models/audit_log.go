@@ -21,12 +21,12 @@ const (
 )
 
 type AuditLog struct {
-	ID           uuid.UUID      `gorm:"type:uuid;primary_key"`
-	UserID       *uuid.UUID     `gorm:"type:uuid;index"`
+	ID           uuid.UUID      `gorm:"type:char(36);primary_key"`
+	UserID       *uuid.UUID     `gorm:"type:char(36);index"`
 	User         *User          `gorm:"foreignKey:UserID"`
 	ActionType   AuditLogAction `gorm:"type:varchar(50);not null;index"`
 	ResourceType string         `gorm:"type:varchar(50);not null"`
-	ResourceID   uuid.UUID      `gorm:"type:uuid;not null"`
+	ResourceID   uuid.UUID      `gorm:"type:char(36);not null"`
 	Details      string         `gorm:"type:text"`
 	CreatedAt    time.Time      `gorm:"index"`
 }
