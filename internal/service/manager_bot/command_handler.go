@@ -12,6 +12,7 @@ import (
 	"github.com/PaulSonOfLars/gotgbot/v2"
 	"github.com/PaulSonOfLars/gotgbot/v2/ext"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.Context) error {
@@ -88,22 +89,28 @@ func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.
 			zap.Int64("user_id", userID),
 			zap.String("proxy_url", s.config.Proxy.URL))
 		httpClient, err := utils.CreateHTTPClientWithProxy(&s.config.Proxy)
-		if err == nil {
-			botClient := &gotgbot.BaseBotClient{
-				Client:             *httpClient,
-				UseTestEnvironment: false,
-				DefaultRequestOpts: nil,
-			}
-			botOpts = &gotgbot.BotOpts{
-				BotClient: botClient,
-			}
-			s.logger.Debug("Proxy HTTP client created",
-				zap.Int64("user_id", userID))
-		} else {
-			s.logger.Debug("Failed to create proxy HTTP client, continuing without proxy",
+		if err != nil {
+			// If proxy is enabled but creation fails, return error immediately
+			// Do not fallback to direct connection to avoid timeout issues
+			s.logger.Error("Failed to create proxy HTTP client",
 				zap.Int64("user_id", userID),
+				zap.String("proxy_url", s.config.Proxy.URL),
 				zap.Error(err))
+			updateWaitMessage(fmt.Sprintf("❌ Proxy configuration error: `%s`", utils.EscapeMarkdown(err.Error())))
+			return fmt.Errorf("failed to create proxy HTTP client: %w", err)
 		}
+
+		botClient := &gotgbot.BaseBotClient{
+			Client:             *httpClient,
+			UseTestEnvironment: false,
+			DefaultRequestOpts: nil,
+		}
+		botOpts = &gotgbot.BotOpts{
+			BotClient: botClient,
+		}
+		s.logger.Debug("Proxy HTTP client created successfully",
+			zap.Int64("user_id", userID),
+			zap.String("proxy_url", s.config.Proxy.URL))
 	}
 
 	s.logger.Debug("Creating bot instance for validation",
@@ -203,79 +210,113 @@ func (s *Service) handleAddBot(ctx context.Context, b *gotgbot.Bot, update *ext.
 		zap.String("bot_username", botInfo.Username),
 		zap.Int("encrypted_length", len(encryptedToken)))
 
-	// Create bot
+	// Create bot with transaction to ensure data consistency
 	forwarderBot := &models.ForwarderBot{
 		Token:     encryptedToken,
 		Name:      botInfo.Username,
 		ManagerID: user.ID,
 	}
 
-	s.logger.Debug("Creating ForwarderBot record",
+	s.logger.Debug("Starting transaction for bot creation",
 		zap.Int64("user_id", userID),
 		zap.String("bot_username", botInfo.Username),
 		zap.String("manager_id", user.ID.String()))
 
-	if err := s.botRepo.Create(forwarderBot); err != nil {
-		s.logger.Error("Failed to create bot", zap.Error(err))
-		updateWaitMessage("❌ Failed to register bot. Please try again later.")
-		return err
-	}
+	// Use transaction to ensure atomicity of bot creation, recipient creation, and audit logging
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		// Create transaction-aware repositories
+		txBotRepo := s.botRepo.WithTx(tx)
+		txRecipientRepo := s.recipientRepo.WithTx(tx)
+		txAuditRepo := s.auditLogRepo.WithTx(tx)
 
-	s.logger.Debug("ForwarderBot created successfully",
-		zap.Int64("user_id", userID),
-		zap.String("bot_id", forwarderBot.ID.String()),
-		zap.String("bot_username", forwarderBot.Name))
-
-	// Add manager as recipient automatically
-	s.logger.Debug("Adding manager as recipient",
-		zap.Int64("user_id", userID),
-		zap.String("bot_id", forwarderBot.ID.String()),
-		zap.Int64("manager_telegram_user_id", user.TelegramUserID))
-
-	// Check if recipient already exists
-	existingRecipient, err := s.recipientRepo.GetByBotIDAndChatID(forwarderBot.ID, user.TelegramUserID)
-	if err == nil && existingRecipient != nil {
-		s.logger.Debug("Manager is already a recipient, skipping",
+		// 1. Create bot
+		s.logger.Debug("Creating ForwarderBot record in transaction",
 			zap.Int64("user_id", userID),
-			zap.String("bot_id", forwarderBot.ID.String()))
-	} else {
-		// Create recipient for manager
-		recipient := &models.Recipient{
-			BotID:         forwarderBot.ID,
-			RecipientType: models.RecipientTypeUser,
-			ChatID:        user.TelegramUserID,
+			zap.String("bot_username", botInfo.Username))
+		if err := txBotRepo.Create(forwarderBot); err != nil {
+			s.logger.Error("Failed to create bot in transaction", zap.Error(err))
+			return fmt.Errorf("failed to create bot: %w", err)
 		}
 
-		if err := s.recipientRepo.Create(recipient); err != nil {
-			s.logger.Warn("Failed to add manager as recipient",
+		s.logger.Debug("ForwarderBot created successfully in transaction",
+			zap.Int64("user_id", userID),
+			zap.String("bot_id", forwarderBot.ID.String()),
+			zap.String("bot_username", forwarderBot.Name))
+
+		// 2. Add manager as recipient automatically
+		s.logger.Debug("Adding manager as recipient in transaction",
+			zap.Int64("user_id", userID),
+			zap.String("bot_id", forwarderBot.ID.String()),
+			zap.Int64("manager_telegram_user_id", user.TelegramUserID))
+
+		// Check if recipient already exists (using transaction-aware repo)
+		existingRecipient, err := txRecipientRepo.GetByBotIDAndChatID(forwarderBot.ID, user.TelegramUserID)
+		if err == nil && existingRecipient != nil {
+			s.logger.Debug("Manager is already a recipient, skipping",
 				zap.Int64("user_id", userID),
-				zap.String("bot_id", forwarderBot.ID.String()),
-				zap.Error(err))
-			// Don't fail the entire operation if recipient creation fails
+				zap.String("bot_id", forwarderBot.ID.String()))
 		} else {
-			s.logger.Debug("Manager added as recipient successfully",
+			// Create recipient for manager
+			recipient := &models.Recipient{
+				BotID:         forwarderBot.ID,
+				RecipientType: models.RecipientTypeUser,
+				ChatID:        user.TelegramUserID,
+			}
+
+			if err := txRecipientRepo.Create(recipient); err != nil {
+				s.logger.Error("Failed to add manager as recipient in transaction",
+					zap.Int64("user_id", userID),
+					zap.String("bot_id", forwarderBot.ID.String()),
+					zap.Error(err))
+				// Return error to rollback bot creation
+				return fmt.Errorf("failed to add manager as recipient: %w", err)
+			}
+
+			s.logger.Debug("Manager added as recipient successfully in transaction",
 				zap.Int64("user_id", userID),
 				zap.String("bot_id", forwarderBot.ID.String()),
 				zap.String("recipient_id", recipient.ID.String()))
 		}
+
+		// 3. Log audit
+		s.logger.Debug("Creating audit log in transaction",
+			zap.Int64("user_id", userID),
+			zap.String("bot_id", forwarderBot.ID.String()))
+		details, _ := json.Marshal(map[string]interface{}{
+			"bot_id":   forwarderBot.ID.String(),
+			"bot_name": forwarderBot.Name,
+		})
+		auditLog := &models.AuditLog{
+			UserID:       &user.ID,
+			ActionType:   models.AuditLogActionAddBot,
+			ResourceType: "bot",
+			ResourceID:   forwarderBot.ID,
+			Details:      string(details),
+		}
+		if err := txAuditRepo.Create(auditLog); err != nil {
+			s.logger.Error("Failed to create audit log in transaction",
+				zap.Int64("user_id", userID),
+				zap.String("bot_id", forwarderBot.ID.String()),
+				zap.Error(err))
+			return fmt.Errorf("failed to create audit log: %w", err)
+		}
+
+		return nil // Transaction committed
+	})
+
+	if err != nil {
+		s.logger.Error("Transaction failed for bot creation",
+			zap.Int64("user_id", userID),
+			zap.String("bot_username", botInfo.Username),
+			zap.Error(err))
+		updateWaitMessage("❌ Failed to register bot due to database error. Please try again later.")
+		return err
 	}
 
-	// Log audit
-	s.logger.Debug("Creating audit log for bot addition",
+	s.logger.Debug("Transaction completed successfully",
 		zap.Int64("user_id", userID),
-		zap.String("bot_id", forwarderBot.ID.String()))
-	details, _ := json.Marshal(map[string]interface{}{
-		"bot_id":   forwarderBot.ID.String(),
-		"bot_name": forwarderBot.Name,
-	})
-	auditLog := &models.AuditLog{
-		UserID:       &user.ID,
-		ActionType:   models.AuditLogActionAddBot,
-		ResourceType: "bot",
-		ResourceID:   forwarderBot.ID,
-		Details:      string(details),
-	}
-	s.auditLogRepo.Create(auditLog)
+		zap.String("bot_id", forwarderBot.ID.String()),
+		zap.String("bot_username", forwarderBot.Name))
 	s.logger.Debug("Audit log created",
 		zap.Int64("user_id", userID),
 		zap.String("bot_id", forwarderBot.ID.String()))
