@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/google/uuid"
 	"go-telegram-forwarder-bot/internal/config"
 	"go-telegram-forwarder-bot/internal/repository"
 	"go-telegram-forwarder-bot/internal/service"
@@ -14,85 +13,90 @@ import (
 	"go-telegram-forwarder-bot/internal/service/message"
 	"go-telegram-forwarder-bot/internal/service/statistics"
 	"go-telegram-forwarder-bot/internal/utils"
+
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
-// BotManager manages the lifecycle of all ForwarderBot instances
-type BotManager struct {
-	bots                        map[uuid.UUID]*ForwarderBot
-	mu                          sync.RWMutex
-	ctx                         context.Context
-	botRepo                     repository.BotRepository
-	recipientRepo               repository.RecipientRepository
-	guestRepo                   repository.GuestRepository
-	blacklistRepo               repository.BlacklistRepository
-	blacklistApprovalMessageRepo repository.BlacklistApprovalMessageRepository
-	botAdminRepo                repository.BotAdminRepository
-	messageMappingRepo          repository.MessageMappingRepository
-	userRepo                    repository.UserRepository
-	auditLogRepo                repository.AuditLogRepository
-	blacklistService            *blacklist.Service
-	statsService                *statistics.Service
-	groupMonitor                *service.GroupMonitor
-	rateLimiter                 *message.RateLimiter
-	retryHandler                *message.RetryHandler
-	errorNotifier               *service.ErrorNotifier
-	managerNotifier             *service.ManagerNotifier
-	config                      *config.Config
-	logger                      *zap.Logger
-	encryptionKey               []byte
-	wg                          sync.WaitGroup
+// BotManagerParams contains all dependencies for creating a BotManager
+type BotManagerParams struct {
+	Ctx                          context.Context
+	BotRepo                      repository.BotRepository
+	RecipientRepo                repository.RecipientRepository
+	GuestRepo                    repository.GuestRepository
+	BlacklistRepo                repository.BlacklistRepository
+	BlacklistApprovalMessageRepo repository.BlacklistApprovalMessageRepository
+	BotAdminRepo                 repository.BotAdminRepository
+	MessageMappingRepo           repository.MessageMappingRepository
+	UserRepo                     repository.UserRepository
+	AuditLogRepo                 repository.AuditLogRepository
+	BlacklistService             *blacklist.Service
+	StatsService                 *statistics.Service
+	GroupMonitor                 *service.GroupMonitor
+	RateLimiter                  *message.RateLimiter
+	RetryHandler                 *message.RetryHandler
+	ErrorNotifier                *service.ErrorNotifier
+	ManagerNotifier              *service.ManagerNotifier
+	Config                       *config.Config
+	Logger                       *zap.Logger
 }
 
-// NewBotManager creates a new BotManager instance
-func NewBotManager(
-	ctx context.Context,
-	botRepo repository.BotRepository,
-	recipientRepo repository.RecipientRepository,
-	guestRepo repository.GuestRepository,
-	blacklistRepo repository.BlacklistRepository,
-	blacklistApprovalMessageRepo repository.BlacklistApprovalMessageRepository,
-	botAdminRepo repository.BotAdminRepository,
-	messageMappingRepo repository.MessageMappingRepository,
-	userRepo repository.UserRepository,
-	auditLogRepo repository.AuditLogRepository,
-	blacklistService *blacklist.Service,
-	statsService *statistics.Service,
-	groupMonitor *service.GroupMonitor,
-	rateLimiter *message.RateLimiter,
-	retryHandler *message.RetryHandler,
-	errorNotifier *service.ErrorNotifier,
-	managerNotifier *service.ManagerNotifier,
-	cfg *config.Config,
-	logger *zap.Logger,
-) (*BotManager, error) {
-	encryptionKey, err := utils.GetEncryptionKeyFromConfig(cfg.EncryptionKey)
+// BotManager manages the lifecycle of all ForwarderBot instances
+type BotManager struct {
+	bots                         map[uuid.UUID]*ForwarderBot
+	mu                           sync.RWMutex
+	ctx                          context.Context
+	botRepo                      repository.BotRepository
+	recipientRepo                repository.RecipientRepository
+	guestRepo                    repository.GuestRepository
+	blacklistRepo                repository.BlacklistRepository
+	blacklistApprovalMessageRepo repository.BlacklistApprovalMessageRepository
+	botAdminRepo                 repository.BotAdminRepository
+	messageMappingRepo           repository.MessageMappingRepository
+	userRepo                     repository.UserRepository
+	auditLogRepo                 repository.AuditLogRepository
+	blacklistService             *blacklist.Service
+	statsService                 *statistics.Service
+	groupMonitor                 *service.GroupMonitor
+	rateLimiter                  *message.RateLimiter
+	retryHandler                 *message.RetryHandler
+	errorNotifier                *service.ErrorNotifier
+	managerNotifier              *service.ManagerNotifier
+	config                       *config.Config
+	logger                       *zap.Logger
+	encryptionKey                []byte
+	wg                           sync.WaitGroup
+}
+
+// NewBotManager creates a new BotManager instance using BotManagerParams
+func NewBotManager(params BotManagerParams) (*BotManager, error) {
+	encryptionKey, err := utils.GetEncryptionKeyFromConfig(params.Config.EncryptionKey, params.Config.Environment)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get encryption key: %w", err)
 	}
 
 	return &BotManager{
-		bots:                        make(map[uuid.UUID]*ForwarderBot),
-		ctx:                         ctx,
-		botRepo:                     botRepo,
-		recipientRepo:               recipientRepo,
-		guestRepo:                   guestRepo,
-		blacklistRepo:               blacklistRepo,
-		blacklistApprovalMessageRepo: blacklistApprovalMessageRepo,
-		botAdminRepo:                botAdminRepo,
-		messageMappingRepo:          messageMappingRepo,
-		userRepo:                    userRepo,
-		auditLogRepo:                auditLogRepo,
-		blacklistService:            blacklistService,
-		statsService:                statsService,
-		groupMonitor:                groupMonitor,
-		rateLimiter:                 rateLimiter,
-		retryHandler:                retryHandler,
-		errorNotifier:               errorNotifier,
-		managerNotifier:             managerNotifier,
-		config:                      cfg,
-		logger:                      logger,
-		encryptionKey:               encryptionKey,
+		bots:                         make(map[uuid.UUID]*ForwarderBot),
+		ctx:                          params.Ctx,
+		botRepo:                      params.BotRepo,
+		recipientRepo:                params.RecipientRepo,
+		guestRepo:                    params.GuestRepo,
+		blacklistRepo:                params.BlacklistRepo,
+		blacklistApprovalMessageRepo: params.BlacklistApprovalMessageRepo,
+		botAdminRepo:                 params.BotAdminRepo,
+		messageMappingRepo:           params.MessageMappingRepo,
+		userRepo:                     params.UserRepo,
+		auditLogRepo:                 params.AuditLogRepo,
+		blacklistService:             params.BlacklistService,
+		statsService:                 params.StatsService,
+		groupMonitor:                 params.GroupMonitor,
+		rateLimiter:                  params.RateLimiter,
+		retryHandler:                 params.RetryHandler,
+		errorNotifier:                params.ErrorNotifier,
+		managerNotifier:              params.ManagerNotifier,
+		config:                       params.Config,
+		logger:                       params.Logger,
+		encryptionKey:                encryptionKey,
 	}, nil
 }
 
@@ -325,4 +329,3 @@ func (bm *BotManager) StopAll() {
 func (bm *BotManager) Wait() {
 	bm.wg.Wait()
 }
-
