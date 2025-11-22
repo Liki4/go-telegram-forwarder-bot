@@ -57,13 +57,19 @@ func TestDecryptTokenWithWrongKey(t *testing.T) {
 }
 
 func TestGetEncryptionKeyFromConfig(t *testing.T) {
-	// Test with empty key (should generate new one)
-	key1, err := GetEncryptionKeyFromConfig("")
+	// Test with empty key in development (should generate new one)
+	key1, err := GetEncryptionKeyFromConfig("", "development")
 	if err != nil {
 		t.Fatalf("Failed to get encryption key from empty config: %v", err)
 	}
 	if len(key1) != 32 {
 		t.Fatalf("Expected key length 32, got %d", len(key1))
+	}
+
+	// Test with empty key in production (should fail)
+	_, err = GetEncryptionKeyFromConfig("", "production")
+	if err == nil {
+		t.Fatal("Should fail with empty key in production environment")
 	}
 
 	// Test with valid base64 key
@@ -73,7 +79,7 @@ func TestGetEncryptionKeyFromConfig(t *testing.T) {
 	}
 	encodedKey := base64.StdEncoding.EncodeToString(validKey)
 
-	key2, err := GetEncryptionKeyFromConfig(encodedKey)
+	key2, err := GetEncryptionKeyFromConfig(encodedKey, "production")
 	if err != nil {
 		t.Fatalf("Failed to get encryption key from valid config: %v", err)
 	}
@@ -87,14 +93,14 @@ func TestGetEncryptionKeyFromConfig(t *testing.T) {
 	}
 
 	// Test with invalid base64
-	_, err = GetEncryptionKeyFromConfig("invalid-base64!")
+	_, err = GetEncryptionKeyFromConfig("invalid-base64!", "production")
 	if err == nil {
 		t.Fatal("Should fail with invalid base64")
 	}
 
 	// Test with wrong length
 	shortKey := base64.StdEncoding.EncodeToString([]byte("short"))
-	_, err = GetEncryptionKeyFromConfig(shortKey)
+	_, err = GetEncryptionKeyFromConfig(shortKey, "production")
 	if err == nil {
 		t.Fatal("Should fail with wrong key length")
 	}

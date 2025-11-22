@@ -68,11 +68,16 @@ func GenerateEncryptionKey() ([]byte, error) {
 }
 
 // GetEncryptionKeyFromConfig decodes base64 encoded encryption key from config
-// If key is empty, generates a new one (for development only)
-func GetEncryptionKeyFromConfig(encodedKey string) ([]byte, error) {
+// environment parameter determines if we should allow random key generation
+// In production environment, encryption_key must be explicitly configured
+func GetEncryptionKeyFromConfig(encodedKey string, environment string) ([]byte, error) {
 	if encodedKey == "" {
-		// For development: generate a new key if not configured
-		// In production, this should always be set
+		// In production environment, encryption_key is required to prevent data loss
+		if environment == "production" {
+			return nil, errors.New("CRITICAL SECURITY ERROR: encryption_key is missing in production environment. System cannot start to prevent data loss")
+		}
+
+		// Development environment allows automatic key generation for convenience
 		return GenerateEncryptionKey()
 	}
 
