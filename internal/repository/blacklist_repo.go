@@ -16,6 +16,7 @@ type BlacklistRepository interface {
 	GetPendingByBotID(botID uuid.UUID) ([]*models.Blacklist, error)
 	GetPendingOrApprovedBanByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) (*models.Blacklist, error)
 	GetLatestApprovedUnbanByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) (*models.Blacklist, error)
+	GetLatestByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) (*models.Blacklist, error)
 	Update(blacklist *models.Blacklist) error
 	ApprovePending(id uuid.UUID) error
 	RejectPending(id uuid.UUID) error
@@ -84,6 +85,18 @@ func (r *blacklistRepository) GetLatestApprovedUnbanByBotIDAndGuestID(botID uuid
 	var blacklist models.Blacklist
 	if err := r.db.Where("bot_id = ? AND guest_id = ? AND request_type = ? AND status = ? AND deleted_at IS NULL",
 		botID, guestID, models.BlacklistRequestTypeUnban, models.BlacklistStatusApproved).
+		Order("created_at DESC").First(&blacklist).Error; err != nil {
+		return nil, err
+	}
+	return &blacklist, nil
+}
+
+// GetLatestByBotIDAndGuestID gets the latest blacklist record for a guest (regardless of type or status)
+// This is optimized to only fetch the most recent record instead of all records
+func (r *blacklistRepository) GetLatestByBotIDAndGuestID(botID uuid.UUID, guestID uuid.UUID) (*models.Blacklist, error) {
+	var blacklist models.Blacklist
+	if err := r.db.Where("bot_id = ? AND guest_id = ? AND deleted_at IS NULL",
+		botID, guestID).
 		Order("created_at DESC").First(&blacklist).Error; err != nil {
 		return nil, err
 	}

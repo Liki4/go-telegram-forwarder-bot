@@ -3,6 +3,7 @@ package blacklist
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"go-telegram-forwarder-bot/internal/models"
@@ -41,65 +42,58 @@ func (s *Service) IsBlacklisted(botID uuid.UUID, guestUserID int64) (bool, error
 		return false, err
 	}
 
-	// Get all blacklist records for this guest, ordered by created_at DESC
-	allBlacklists, err := s.blacklistRepo.GetAllByBotIDAndGuestID(botID, guest.ID)
+	// Performance optimization: Only query the latest record instead of all records
+	// This avoids loading potentially thousands of historical records into memory
+	latest, err := s.blacklistRepo.GetLatestByBotIDAndGuestID(botID, guest.ID)
 	if err != nil {
+		// If no record found, user is not blacklisted
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
 		return false, err
 	}
 
-	// If no blacklist records exist, user is not blacklisted
-	if len(allBlacklists) == 0 {
+	// Ban logic: approved or pending → blacklisted, rejected → not blacklisted
+	if latest.RequestType == models.BlacklistRequestTypeBan {
+		if latest.Status == models.BlacklistStatusApproved || latest.Status == models.BlacklistStatusPending {
+			s.logger.Debug("User is blacklisted due to ban",
+				zap.String("bot_id", botID.String()),
+				zap.String("guest_id", guest.ID.String()),
+				zap.String("ban_status", string(latest.Status)),
+				zap.Time("ban_created_at", latest.CreatedAt))
+			return true, nil
+		}
+		// Ban rejected → not blacklisted
+		s.logger.Debug("User is not blacklisted (ban rejected)",
+			zap.String("bot_id", botID.String()),
+			zap.String("guest_id", guest.ID.String()))
 		return false, nil
 	}
 
-	// Find the latest approved unban and the latest active ban (approved or pending)
-	// The logic: if there's an approved unban that is newer than any active ban, user is not blacklisted
-	var latestApprovedUnban *models.Blacklist
-	var latestActiveBan *models.Blacklist
-
-	for _, bl := range allBlacklists {
-		// Check for approved unban
-		if bl.RequestType == models.BlacklistRequestTypeUnban &&
-			bl.Status == models.BlacklistStatusApproved {
-			if latestApprovedUnban == nil || bl.CreatedAt.After(latestApprovedUnban.CreatedAt) {
-				latestApprovedUnban = bl
-			}
-		}
-
-		// Check for active ban (approved or pending)
-		if bl.RequestType == models.BlacklistRequestTypeBan &&
-			(bl.Status == models.BlacklistStatusApproved || bl.Status == models.BlacklistStatusPending) {
-			if latestActiveBan == nil || bl.CreatedAt.After(latestActiveBan.CreatedAt) {
-				latestActiveBan = bl
-			}
-		}
-	}
-
-	// If there's an approved unban and it's newer than any active ban, user is not blacklisted
-	if latestApprovedUnban != nil {
-		if latestActiveBan == nil || latestApprovedUnban.CreatedAt.After(latestActiveBan.CreatedAt) {
-			s.logger.Debug("User is not blacklisted due to approved unban",
+	// Unban logic: rejected or pending → blacklisted, approved → not blacklisted
+	if latest.RequestType == models.BlacklistRequestTypeUnban {
+		if latest.Status == models.BlacklistStatusRejected || latest.Status == models.BlacklistStatusPending {
+			s.logger.Debug("User is blacklisted (unban rejected or pending)",
 				zap.String("bot_id", botID.String()),
 				zap.String("guest_id", guest.ID.String()),
-				zap.Time("unban_created_at", latestApprovedUnban.CreatedAt))
-			return false, nil
+				zap.String("unban_status", string(latest.Status)),
+				zap.Time("unban_created_at", latest.CreatedAt))
+			return true, nil
 		}
-	}
-
-	// If there's an active ban, user is blacklisted
-	if latestActiveBan != nil {
-		s.logger.Debug("User is blacklisted due to active ban",
+		// Unban approved → not blacklisted
+		s.logger.Debug("User is not blacklisted (unban approved)",
 			zap.String("bot_id", botID.String()),
 			zap.String("guest_id", guest.ID.String()),
-			zap.String("ban_status", string(latestActiveBan.Status)),
-			zap.Time("ban_created_at", latestActiveBan.CreatedAt))
-		return true, nil
+			zap.Time("unban_created_at", latest.CreatedAt))
+		return false, nil
 	}
 
-	// No active ban found, user is not blacklisted
-	s.logger.Debug("User is not blacklisted",
+	// Should not reach here, but default to not blacklisted
+	s.logger.Warn("Unexpected blacklist record type",
 		zap.String("bot_id", botID.String()),
-		zap.String("guest_id", guest.ID.String()))
+		zap.String("guest_id", guest.ID.String()),
+		zap.String("request_type", string(latest.RequestType)),
+		zap.String("status", string(latest.Status)))
 	return false, nil
 }
 
@@ -111,6 +105,28 @@ func (s *Service) CreateBanRequest(
 	guest, err := s.guestRepo.GetOrCreateByBotIDAndUserID(botID, guestUserID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Check if ban can be triggered based on latest state
+	// Can trigger ban if: latest is ban (pending/rejected) or unban (approved)
+	latest, err := s.blacklistRepo.GetLatestByBotIDAndGuestID(botID, guest.ID)
+	if err == nil && latest != nil {
+		canTrigger := false
+		if latest.RequestType == models.BlacklistRequestTypeBan {
+			// Can trigger if ban is pending or rejected
+			if latest.Status == models.BlacklistStatusPending || latest.Status == models.BlacklistStatusRejected {
+				canTrigger = true
+			}
+		} else if latest.RequestType == models.BlacklistRequestTypeUnban {
+			// Can trigger if unban is approved
+			if latest.Status == models.BlacklistStatusApproved {
+				canTrigger = true
+			}
+		}
+
+		if !canTrigger {
+			return nil, fmt.Errorf("cannot trigger ban: latest state is %s %s, which does not allow ban request", latest.RequestType, latest.Status)
+		}
 	}
 
 	blacklist := &models.Blacklist{
@@ -137,6 +153,28 @@ func (s *Service) CreateUnbanRequest(
 	guest, err := s.guestRepo.GetOrCreateByBotIDAndUserID(botID, guestUserID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Check if unban can be triggered based on latest state
+	// Can trigger unban if: latest is unban (rejected/pending) or ban (approved)
+	latest, err := s.blacklistRepo.GetLatestByBotIDAndGuestID(botID, guest.ID)
+	if err == nil && latest != nil {
+		canTrigger := false
+		if latest.RequestType == models.BlacklistRequestTypeUnban {
+			// Can trigger if unban is rejected or pending
+			if latest.Status == models.BlacklistStatusRejected || latest.Status == models.BlacklistStatusPending {
+				canTrigger = true
+			}
+		} else if latest.RequestType == models.BlacklistRequestTypeBan {
+			// Can trigger if ban is approved
+			if latest.Status == models.BlacklistStatusApproved {
+				canTrigger = true
+			}
+		}
+
+		if !canTrigger {
+			return nil, fmt.Errorf("cannot trigger unban: latest state is %s %s, which does not allow unban request", latest.RequestType, latest.Status)
+		}
 	}
 
 	blacklist := &models.Blacklist{
