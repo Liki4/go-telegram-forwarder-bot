@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"go-telegram-forwarder-bot/internal/config"
 	"go-telegram-forwarder-bot/internal/service/forwarder_bot"
@@ -22,6 +23,7 @@ type ForwarderBot struct {
 	service *forwarder_bot.Service
 	logger  *zap.Logger
 	stop    chan struct{}
+	stopOnce sync.Once
 }
 
 func NewForwarderBot(token string, botID uuid.UUID, service *forwarder_bot.Service, logger *zap.Logger, cfg *config.Config) (*ForwarderBot, error) {
@@ -118,10 +120,12 @@ func (fb *ForwarderBot) Start(ctx context.Context) error {
 }
 
 func (fb *ForwarderBot) Stop() {
-	close(fb.stop)
-	fb.updater.Stop()
-	fb.logger.Info("ForwarderBot stopped",
-		zap.String("bot_id", fb.botID.String()))
+	fb.stopOnce.Do(func() {
+		close(fb.stop)
+		fb.updater.Stop()
+		fb.logger.Info("ForwarderBot stopped",
+			zap.String("bot_id", fb.botID.String()))
+	})
 }
 
 func (fb *ForwarderBot) GetBotID() uuid.UUID {
