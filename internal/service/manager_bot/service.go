@@ -14,6 +14,7 @@ import (
 	"github.com/PaulSonOfLars/gotgbot/v2/ext"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // BotManagerInterface defines the interface for managing ForwarderBot lifecycle
@@ -23,6 +24,7 @@ type BotManagerInterface interface {
 }
 
 type Service struct {
+	db            *gorm.DB
 	botRepo       repository.BotRepository
 	userRepo      repository.UserRepository
 	auditLogRepo  repository.AuditLogRepository
@@ -35,6 +37,7 @@ type Service struct {
 }
 
 func NewService(
+	db *gorm.DB,
 	botRepo repository.BotRepository,
 	userRepo repository.UserRepository,
 	auditLogRepo repository.AuditLogRepository,
@@ -43,12 +46,13 @@ func NewService(
 	cfg *config.Config,
 	logger *zap.Logger,
 ) (*Service, error) {
-	key, err := utils.GetEncryptionKeyFromConfig(cfg.EncryptionKey)
+	key, err := utils.GetEncryptionKeyFromConfig(cfg.EncryptionKey, cfg.Environment)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get encryption key: %w", err)
 	}
 
 	return &Service{
+		db:            db,
 		botRepo:       botRepo,
 		userRepo:      userRepo,
 		auditLogRepo:  auditLogRepo,

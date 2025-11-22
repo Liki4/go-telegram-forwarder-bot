@@ -11,6 +11,7 @@ type AuditLogRepository interface {
 	GetByID(id uuid.UUID) (*models.AuditLog, error)
 	GetByUserID(userID uuid.UUID, limit int) ([]*models.AuditLog, error)
 	GetByActionType(actionType models.AuditLogAction, limit int) ([]*models.AuditLog, error)
+	WithTx(tx *gorm.DB) AuditLogRepository
 }
 
 type auditLogRepository struct {
@@ -55,4 +56,8 @@ func (r *auditLogRepository) GetByActionType(actionType models.AuditLogAction, l
 		return nil, err
 	}
 	return logs, nil
+}
+
+func (r *auditLogRepository) WithTx(tx *gorm.DB) AuditLogRepository {
+	return &auditLogRepository{db: tx}
 }

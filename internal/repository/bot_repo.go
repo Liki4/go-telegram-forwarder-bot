@@ -14,6 +14,7 @@ type BotRepository interface {
 	Update(bot *models.ForwarderBot) error
 	Delete(id uuid.UUID) error
 	GetByToken(token string) (*models.ForwarderBot, error)
+	WithTx(tx *gorm.DB) BotRepository
 }
 
 type botRepository struct {
@@ -66,4 +67,8 @@ func (r *botRepository) GetByToken(token string) (*models.ForwarderBot, error) {
 		return nil, err
 	}
 	return &bot, nil
+}
+
+func (r *botRepository) WithTx(tx *gorm.DB) BotRepository {
+	return &botRepository{db: tx}
 }

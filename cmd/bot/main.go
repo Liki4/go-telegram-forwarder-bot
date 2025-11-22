@@ -123,6 +123,7 @@ func main() {
 
 	// Initialize ManagerBot service
 	managerBotService, err := manager_bot.NewService(
+		db,
 		botRepo,
 		userRepo,
 		auditLogRepo,
@@ -157,27 +158,27 @@ func main() {
 	}
 
 	// Create BotManager for dynamic bot lifecycle management
-	botManager, err := bot.NewBotManager(
-		ctx,
-		botRepo,
-		recipientRepo,
-		guestRepo,
-		blacklistRepo,
-		blacklistApprovalMessageRepo,
-		botAdminRepo,
-		messageMappingRepo,
-		userRepo,
-		auditLogRepo,
-		blacklistService,
-		statsService,
-		groupMonitor,
-		rateLimiter,
-		retryHandler,
-		errorNotifier,
-		managerNotifier,
-		cfg,
-		log,
-	)
+	botManager, err := bot.NewBotManager(bot.BotManagerParams{
+		Ctx:                          ctx,
+		BotRepo:                      botRepo,
+		RecipientRepo:                recipientRepo,
+		GuestRepo:                    guestRepo,
+		BlacklistRepo:                blacklistRepo,
+		BlacklistApprovalMessageRepo: blacklistApprovalMessageRepo,
+		BotAdminRepo:                 botAdminRepo,
+		MessageMappingRepo:           messageMappingRepo,
+		UserRepo:                     userRepo,
+		AuditLogRepo:                 auditLogRepo,
+		BlacklistService:             blacklistService,
+		StatsService:                 statsService,
+		GroupMonitor:                 groupMonitor,
+		RateLimiter:                  rateLimiter,
+		RetryHandler:                 retryHandler,
+		ErrorNotifier:                errorNotifier,
+		ManagerNotifier:              managerNotifier,
+		Config:                       cfg,
+		Logger:                       log,
+	})
 	if err != nil {
 		log.Fatal("Failed to create BotManager", zap.Error(err))
 	}

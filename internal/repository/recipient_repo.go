@@ -14,6 +14,7 @@ type RecipientRepository interface {
 	Update(recipient *models.Recipient) error
 	Delete(id uuid.UUID) error
 	DeleteByBotIDAndChatID(botID uuid.UUID, chatID int64) error
+	WithTx(tx *gorm.DB) RecipientRepository
 }
 
 type recipientRepository struct {
@@ -62,4 +63,8 @@ func (r *recipientRepository) Delete(id uuid.UUID) error {
 
 func (r *recipientRepository) DeleteByBotIDAndChatID(botID uuid.UUID, chatID int64) error {
 	return r.db.Where("bot_id = ? AND chat_id = ?", botID, chatID).Delete(&models.Recipient{}).Error
+}
+
+func (r *recipientRepository) WithTx(tx *gorm.DB) RecipientRepository {
+	return &recipientRepository{db: tx}
 }
