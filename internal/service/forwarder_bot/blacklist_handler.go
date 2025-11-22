@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"go-telegram-forwarder-bot/internal/models"
 
@@ -167,9 +168,31 @@ func (s *Service) handleBan(ctx context.Context, b *gotgbot.Bot, update *ext.Con
 	blacklist, err := s.blacklistService.CreateBanRequest(s.botID, guestUserID, requestUser.ID)
 	if err != nil {
 		s.logger.Error("Failed to create ban request", zap.Error(err))
+		// Check if error is due to trigger condition
+		if strings.Contains(err.Error(), "cannot trigger ban") {
+			_, err := b.SendMessage(update.EffectiveChat.Id,
+				"Cannot create ban request: The current blacklist state does not allow a new ban request. Please wait for the current request to be processed.", nil)
+			return err
+		}
 		_, err := b.SendMessage(update.EffectiveChat.Id,
 			"Failed to create ban request. Please try again later.", nil)
 		return err
+	}
+
+	// Notify guest immediately when ban request is created (pending state)
+	s.logger.Debug("Sending ban notification to guest",
+		zap.String("bot_id", s.botID.String()),
+		zap.Int64("guest_user_id", guestUserID),
+		zap.String("blacklist_id", blacklist.ID.String()))
+	guest, err := s.guestRepo.GetByBotIDAndUserID(s.botID, guestUserID)
+	if err == nil {
+		_, _ = b.SendMessage(guest.GuestUserID,
+			"You have been banned from this bot.", nil)
+	} else {
+		s.logger.Warn("Failed to get guest for ban notification",
+			zap.String("bot_id", s.botID.String()),
+			zap.Int64("guest_user_id", guestUserID),
+			zap.Error(err))
 	}
 
 	// Send approval request to manager and all admins
@@ -298,6 +321,12 @@ func (s *Service) handleUnban(ctx context.Context, b *gotgbot.Bot, update *ext.C
 	blacklist, err := s.blacklistService.CreateUnbanRequest(s.botID, guestUserID, requestUser.ID)
 	if err != nil {
 		s.logger.Error("Failed to create unban request", zap.Error(err))
+		// Check if error is due to trigger condition
+		if strings.Contains(err.Error(), "cannot trigger unban") {
+			_, err := b.SendMessage(update.EffectiveChat.Id,
+				"Cannot create unban request: The current blacklist state does not allow a new unban request. Please wait for the current request to be processed.", nil)
+			return err
+		}
 		_, err := b.SendMessage(update.EffectiveChat.Id,
 			"Failed to create unban request. Please try again later.", nil)
 		return err
@@ -432,16 +461,14 @@ func (s *Service) handleBlacklistCallback(ctx context.Context, b *gotgbot.Bot, u
 			return err
 		}
 
-		// Notify guest
+		// Notify guest (only for unban, ban notification is sent when request is created)
 		guest, err := s.guestRepo.GetByID(blacklist.GuestID)
 		if err == nil {
-			if blacklist.RequestType == models.BlacklistRequestTypeBan {
-				_, _ = b.SendMessage(guest.GuestUserID,
-					"You have been banned from this bot.", nil)
-			} else if blacklist.RequestType == models.BlacklistRequestTypeUnban {
+			if blacklist.RequestType == models.BlacklistRequestTypeUnban {
 				_, _ = b.SendMessage(guest.GuestUserID,
 					"You have been unbanned from this bot.", nil)
 			}
+			// Ban notification is sent when ban request is created (pending state), not here
 		}
 
 		// Log audit
@@ -475,6 +502,25 @@ func (s *Service) handleBlacklistCallback(ctx context.Context, b *gotgbot.Bot, u
 				Text: "Failed to reject request",
 			})
 			return err
+		}
+
+		// Notify guest when ban is rejected
+		guest, err := s.guestRepo.GetByID(blacklist.GuestID)
+		if err == nil {
+			if blacklist.RequestType == models.BlacklistRequestTypeBan {
+				s.logger.Debug("Sending ban rejection notification to guest",
+					zap.String("bot_id", s.botID.String()),
+					zap.String("guest_id", guest.ID.String()),
+					zap.String("blacklist_id", blacklistID.String()))
+				_, _ = b.SendMessage(guest.GuestUserID,
+					"Your ban request has been rejected. You are not blacklisted and can continue using this bot.", nil)
+			}
+			// Unban rejection doesn't need notification as it doesn't change the blacklist status
+		} else {
+			s.logger.Warn("Failed to get guest for rejection notification",
+				zap.String("bot_id", s.botID.String()),
+				zap.String("blacklist_id", blacklistID.String()),
+				zap.Error(err))
 		}
 
 		// Edit all approval messages

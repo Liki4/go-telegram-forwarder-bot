@@ -54,7 +54,7 @@ func NewService(
 	cfg *config.Config,
 	logger *zap.Logger,
 ) (*Service, error) {
-	key, err := utils.GetEncryptionKeyFromConfig(cfg.EncryptionKey)
+	key, err := utils.GetEncryptionKeyFromConfig(cfg.EncryptionKey, cfg.Environment)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get encryption key: %w", err)
 	}
