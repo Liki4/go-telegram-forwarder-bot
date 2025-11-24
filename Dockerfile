@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y bash curl build-essential gcc tzdata
 
 COPY go_telegram_forwarder_bot /bin/go_telegram_forwarder_bot
 
-RUN chmod +x /bin/go_telegram_forwarder_bot && mkdir -p /bin/configs/
+RUN chmod +x /bin/go_telegram_forwarder_bot && mkdir -p /bin/configs/ && mkdir -p /var/log/telegram-forwarder-bot/
 
 WORKDIR /bin/
 
