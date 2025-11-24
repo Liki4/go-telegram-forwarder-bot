@@ -17,12 +17,12 @@ import (
 )
 
 type ForwarderBot struct {
-	botID   uuid.UUID
-	bot     *gotgbot.Bot
-	updater *ext.Updater
-	service *forwarder_bot.Service
-	logger  *zap.Logger
-	stop    chan struct{}
+	botID    uuid.UUID
+	bot      *gotgbot.Bot
+	updater  *ext.Updater
+	service  *forwarder_bot.Service
+	logger   *zap.Logger
+	stop     chan struct{}
 	stopOnce sync.Once
 }
 

@@ -388,7 +388,7 @@ func (s *Service) handleHelp(ctx context.Context, b *gotgbot.Bot, update *ext.Co
 		helpText += "*/ban* - Ban a guest (reply to their message)\n"
 	}
 	helpText += "*/unban* - Unban a guest (reply to their message, or use directly to request unban for yourself)\n"
-	
+
 	if !isPureGuest {
 		helpText += "\n*Note:*\n"
 		helpText += "- Ban command can be used by Manager, Admins, or any user in a group recipient\n"

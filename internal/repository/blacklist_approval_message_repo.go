@@ -47,4 +47,3 @@ func (r *blacklistApprovalMessageRepository) DeleteByBlacklistID(blacklistID uui
 	return r.db.Where("blacklist_id = ?", blacklistID).
 		Delete(&models.BlacklistApprovalMessage{}).Error
 }
-

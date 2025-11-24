@@ -9,16 +9,16 @@ import (
 
 // BlacklistApprovalMessage stores the message ID sent to each manager/admin for approval requests
 type BlacklistApprovalMessage struct {
-	ID            uuid.UUID `gorm:"type:char(36);primary_key"`
-	BlacklistID   uuid.UUID `gorm:"type:char(36);not null;index"`
-	Blacklist     Blacklist `gorm:"foreignKey:BlacklistID"`
-	UserID        uuid.UUID `gorm:"type:char(36);not null;index"`
-	User          User      `gorm:"foreignKey:UserID"`
-	ChatID        int64     `gorm:"not null"`
-	MessageID     int64     `gorm:"not null"`
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	DeletedAt     gorm.DeletedAt `gorm:"index"`
+	ID          uuid.UUID `gorm:"type:char(36);primary_key"`
+	BlacklistID uuid.UUID `gorm:"type:char(36);not null;index"`
+	Blacklist   Blacklist `gorm:"foreignKey:BlacklistID"`
+	UserID      uuid.UUID `gorm:"type:char(36);not null;index"`
+	User        User      `gorm:"foreignKey:UserID"`
+	ChatID      int64     `gorm:"not null"`
+	MessageID   int64     `gorm:"not null"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	DeletedAt   gorm.DeletedAt `gorm:"index"`
 }
 
 func (b *BlacklistApprovalMessage) BeforeCreate(tx *gorm.DB) error {
@@ -27,4 +27,3 @@ func (b *BlacklistApprovalMessage) BeforeCreate(tx *gorm.DB) error {
 	}
 	return nil
 }
-
