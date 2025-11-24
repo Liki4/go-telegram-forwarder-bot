@@ -1,6 +1,6 @@
 FROM ubuntu:latest
 
-RUN apt-get update && apt-get install -y bash curl build-essential gcc
+RUN apt-get update && apt-get install -y bash curl build-essential gcc tzdata
 
 COPY go_telegram_forwarder_bot /bin/go_telegram_forwarder_bot
 
