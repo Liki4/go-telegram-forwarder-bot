@@ -1,0 +1,345 @@
+# Kubernetes Deployment for Telegram Forwarder Bot
+# 
+# This file contains all necessary Kubernetes resources:
+# - Namespace: telegram-forwarder-bot
+# - Secrets: Database credentials and bot configuration
+# - PostgreSQL: Deployment and Service (using hostPath: /data/telegram-forwarder-bot/postgres)
+# - Redis: Deployment and Service (using hostPath: /data/telegram-forwarder-bot/redis)
+# - Bot: Deployment
+#
+# IMPORTANT: Before deploying, update the following:
+# 1. Ensure host directories exist or have proper permissions:
+#    - /data/telegram-forwarder-bot/postgres (PostgreSQL data)
+#    - /data/telegram-forwarder-bot/redis (Redis data)
+#    - /data/telegram-forwarder-bot/logs (Bot logs)
+# 2. db-secrets Secret: Change postgres-password and redis-password to secure values
+# 3. bot-config Secret: 
+#    - Update manager_bot.token with your actual Telegram bot token
+#    - Update manager_bot.superusers with your Telegram user IDs
+#    - Update database.dsn password to match db-secrets postgres-password
+#    - Update redis.password to match db-secrets redis-password
+#    - Update encryption_key with a base64-encoded 32-byte key (generate with: openssl rand -base64 32)
+#    - Configure proxy settings if needed
+
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: telegram-forwarder-bot
+  labels:
+    name: telegram-forwarder-bot
+
+---
+# Secret for database and Redis passwords
+# IMPORTANT: Change these passwords before deploying to production
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-secrets
+  namespace: telegram-forwarder-bot
+type: Opaque
+stringData:
+  postgres-password: "postgres"
+  postgres-user: "postgres"
+  redis-password: "redis-password"
+
+---
+# Secret for bot configuration file
+# IMPORTANT: Update all placeholder values before deploying
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bot-config
+  namespace: telegram-forwarder-bot
+type: Opaque
+stringData:
+  config.yaml: |
+    manager_bot:
+      token: "YOUR_MANAGER_BOT_TOKEN"
+      superusers: [123456789, 987654321]
+
+    database:
+      type: "postgres"
+      dsn: "host=postgres-service user=postgres password=postgres dbname=bot port=5432 sslmode=disable TimeZone=Asia/Shanghai"
+
+    redis:
+      enabled: true
+      address: "redis-service:6379"
+      password: "redis-password"
+      db: 0
+
+    rate_limit:
+      telegram_api: 25
+      guest_message: 1
+
+    retry:
+      max_attempts: 10
+      interval_seconds: 30
+
+    log:
+      level: "info"
+      output: "both"
+      file_path: "/var/log/telegram-forwarder-bot/bot.log"
+
+    environment: "production"
+
+    encryption_key: "YOUR_BASE64_ENCODED_32_BYTE_KEY"
+
+    proxy:
+      enabled: false
+      url: ""
+      username: ""
+      password: ""
+
+---
+# PostgreSQL Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: telegram-forwarder-bot
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:18-alpine
+        command: ["sh", "-c"]
+        args:
+        - |
+          apk add --no-cache tzdata
+          exec docker-entrypoint.sh postgres
+        ports:
+        - containerPort: 5432
+          name: postgres
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: db-secrets
+              key: postgres-user
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-secrets
+              key: postgres-password
+        - name: POSTGRES_DB
+          value: "bot"
+        - name: PGDATA
+          value: /var/lib/postgresql/18/docker
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U postgres
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U postgres
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: postgres-storage
+        hostPath:
+          path: /data/telegram-forwarder-bot/postgres
+          type: DirectoryOrCreate
+
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: telegram-forwarder-bot
+  labels:
+    app: postgres
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+    name: postgres
+  selector:
+    app: postgres
+
+---
+# Redis Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: telegram-forwarder-bot
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:8-alpine
+        ports:
+        - containerPort: 6379
+          name: redis
+        command:
+        - redis-server
+        - --requirepass
+        - $(REDIS_PASSWORD)
+        - --appendonly
+        - "yes"
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-secrets
+              key: redis-password
+        volumeMounts:
+        - name: redis-storage
+          mountPath: /data
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - redis-cli -a $(REDIS_PASSWORD) ping
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - redis-cli -a $(REDIS_PASSWORD) ping
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: redis-storage
+        hostPath:
+          path: /data/telegram-forwarder-bot/redis
+          type: DirectoryOrCreate
+
+---
+# Redis Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: telegram-forwarder-bot
+  labels:
+    app: redis
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6379
+    targetPort: 6379
+    protocol: TCP
+    name: redis
+  selector:
+    app: redis
+
+---
+# Bot Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telegram-forwarder-bot
+  namespace: telegram-forwarder-bot
+  labels:
+    app: telegram-forwarder-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telegram-forwarder-bot
+  template:
+    metadata:
+      labels:
+        app: telegram-forwarder-bot
+    spec:
+      containers:
+      - name: bot
+        image: registry.cn-hongkong.aliyuncs.com/liki4/go_telegram_forwarder_bot:v0.0.1
+        imagePullPolicy: Always
+        env:
+        - name: CONFIG_PATH
+          value: /bin/configs/config.yaml
+        volumeMounts:
+        - name: config
+          mountPath: /bin/configs
+          readOnly: true
+        - name: logs
+          mountPath: /var/log/telegram-forwarder-bot
+          subPath: ""
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - ps aux | grep -v grep | grep go_telegram_forwarder_bot > /dev/null
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - ps aux | grep -v grep | grep go_telegram_forwarder_bot > /dev/null
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: config
+        secret:
+          secretName: bot-config
+      - name: logs
+        hostPath:
+          path: /data/telegram-forwarder-bot/logs
+          type: DirectoryOrCreate
+
