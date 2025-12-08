@@ -157,6 +157,58 @@ func (s *Service) IsManagerOrAdmin(userID int64) (bool, error) {
 	return s.IsAdmin(userID)
 }
 
+// isSystemMessage checks if a message is a system message (e.g., user joined/left, chat title changed, etc.)
+// System messages cannot be forwarded and should be ignored
+func (s *Service) isSystemMessage(message *gotgbot.Message) bool {
+	// System messages typically don't have a From field
+	if message.From == nil {
+		return true
+	}
+
+	// Check for various system message types
+	if len(message.NewChatMembers) > 0 {
+		return true
+	}
+	if message.LeftChatMember != nil {
+		return true
+	}
+	if message.NewChatTitle != "" {
+		return true
+	}
+	if message.NewChatPhoto != nil {
+		return true
+	}
+	if message.DeleteChatPhoto {
+		return true
+	}
+	if message.GroupChatCreated {
+		return true
+	}
+	if message.SupergroupChatCreated {
+		return true
+	}
+	if message.ChannelChatCreated {
+		return true
+	}
+	if message.MigrateToChatId != 0 {
+		return true
+	}
+	if message.PinnedMessage != nil {
+		return true
+	}
+	if message.ProximityAlertTriggered != nil {
+		return true
+	}
+	if message.WebAppData != nil {
+		return true
+	}
+	if message.ConnectedWebsite != "" {
+		return true
+	}
+
+	return false
+}
+
 func (s *Service) HandleMessage(ctx context.Context, b *gotgbot.Bot, update *ext.Context) error {
 	message := update.EffectiveMessage
 	chatID := update.EffectiveChat.Id
@@ -170,6 +222,16 @@ func (s *Service) HandleMessage(ctx context.Context, b *gotgbot.Bot, update *ext
 		zap.Int64("chat_id", chatID),
 		zap.String("text", message.Text),
 		zap.Bool("is_reply", message.ReplyToMessage != nil))
+
+	// Check if message is a system message (e.g., user joined/left, chat title changed, etc.)
+	// System messages cannot be forwarded and should be ignored
+	if s.isSystemMessage(message) {
+		s.logger.Debug("Message is a system message, ignoring",
+			zap.String("bot_id", s.botID.String()),
+			zap.Int64("message_id", messageID),
+			zap.Int64("chat_id", chatID))
+		return nil
+	}
 
 	// Check if message is a command
 	if message.Text != "" && strings.HasPrefix(message.Text, "/") {
