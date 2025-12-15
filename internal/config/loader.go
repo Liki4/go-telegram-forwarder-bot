@@ -67,6 +67,8 @@ func setDefaults() {
 	viper.SetDefault("proxy.url", "")
 	viper.SetDefault("proxy.username", "")
 	viper.SetDefault("proxy.password", "")
+
+	viper.SetDefault("ad_filter.enabled", false)
 }
 
 func validate(cfg *Config) error {
