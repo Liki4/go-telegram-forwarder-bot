@@ -26,6 +26,7 @@
 - **详细日志**：完整的 debug 级别日志，记录所有操作和状态变化
 - **消息映射**：完整记录所有消息的映射关系，支持复杂的双向对话场景
 - **智能黑名单**：正确处理 ban/unban 组合，确保黑名单状态准确
+- **广告拦截**：可配置的广告拦截功能，自动拦截包含 @用户名或链接的消息，防止广告骚扰
 
 ## 🏗️ 系统架构
 
@@ -191,6 +192,9 @@ proxy:
   url: ""                # 代理地址，如 "http://127.0.0.1:7890" 或 "socks5://127.0.0.1:1080"
   username: ""           # 代理认证用户名（可选）
   password: ""            # 代理认证密码（可选）
+
+ad_filter:
+  enabled: false          # 是否启用广告拦截（拦截包含 @用户名 或链接的消息）
 ```
 
 ## 📖 使用指南
@@ -366,6 +370,8 @@ ForwarderBot 接收
     ↓
 检查黑名单 → 如果在黑名单，丢弃
     ↓
+检查广告内容（如果启用） → 如果包含 @用户名 或链接，拦截并通知用户
+    ↓
 检查限流 → 如果超限，延迟发送
     ↓
 并发转发给所有 Recipients
@@ -421,6 +427,41 @@ ForwarderBot 接收
 - Guest 可以回复任何收到的消息
 - 系统会找到该消息对应的所有 Recipients
 - 如果消息被转发给多个 Recipients，Guest 的回复会发送给所有这些 Recipients
+
+### 广告拦截
+
+系统支持可配置的广告拦截功能，用于防止广告骚扰。
+
+**拦截规则：**
+- 检测消息中的 `@用户名`（mention 或 text_mention 类型的 Entity）
+- 检测消息中的链接（url 或 text_link 类型的 Entity）
+
+**工作流程：**
+```
+Guest 发送消息
+    ↓
+检查广告拦截是否启用
+    ↓
+如果启用，检查消息是否包含 @用户名 或链接
+    ↓
+如果包含，拦截消息并通知用户
+    ↓
+不转发消息
+```
+
+**配置方式：**
+在配置文件中设置 `ad_filter.enabled: true` 即可启用。
+
+**用户通知：**
+当消息被拦截时，系统会向发送者发送通知，说明拦截原因：
+- 包含 @用户名：`"Your message was not forwarded because it contains a mention (@username)."`
+- 包含链接：`"Your message was not forwarded because it contains a link (http/https)."`
+- 同时包含两者：`"Your message was not forwarded because it contains a mention (@username) or a link (http/https)."`
+
+**注意事项：**
+- 广告拦截只对 Guest 发送的消息生效
+- 命令和回复消息不受广告拦截影响
+- 系统消息（如进群/离群）会被系统消息过滤器处理，不会触发广告拦截
 
 ## 🧪 测试
 
@@ -508,6 +549,7 @@ go-telegram-forwarder-bot/
 7. **输入验证**：所有用户输入都经过验证和清理
 8. **消息映射安全**：通过消息映射准确识别用户，防止误操作
 9. **黑名单逻辑**：正确处理 ban/unban 组合，确保状态准确
+10. **广告拦截**：可配置的广告拦截功能，自动拦截包含 @用户名 或链接的消息，防止广告骚扰
 
 ## 🐛 故障排除
 
@@ -587,6 +629,26 @@ go-telegram-forwarder-bot/
 - 系统已优化黑名单逻辑，正确处理 ban/unban 组合
 - 如果遇到问题，检查数据库中的 `blacklists` 表记录
 - 系统会查找最新的 approved unban 和 active ban 来判断当前状态
+
+#### 8. 广告拦截功能
+**问题**：如何启用或禁用广告拦截功能？
+
+**配置方式：**
+在配置文件中设置 `ad_filter.enabled: true` 即可启用广告拦截。
+
+**拦截规则：**
+- 拦截包含 `@用户名` 的消息（mention 或 text_mention 类型的 Entity）
+- 拦截包含链接的消息（url 或 text_link 类型的 Entity）
+
+**注意事项：**
+- 广告拦截只对 Guest 发送的普通消息生效
+- 命令（以 `/` 开头）不受广告拦截影响
+- 回复消息不受广告拦截影响
+- 系统消息会被系统消息过滤器处理，不会触发广告拦截
+- 被拦截的消息会向发送者发送通知，说明拦截原因
+
+**禁用广告拦截：**
+设置 `ad_filter.enabled: false` 或删除该配置项（默认为 false）。
 
 ## 📝 开发指南
 
