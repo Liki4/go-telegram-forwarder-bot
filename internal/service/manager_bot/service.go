@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"go-telegram-forwarder-bot/internal/config"
 	"go-telegram-forwarder-bot/internal/repository"
@@ -34,6 +35,7 @@ type Service struct {
 	logger        *zap.Logger
 	encryptionKey []byte
 	botManager    BotManagerInterface
+	commandsCache sync.Map // Cache to track users whose commands have been updated
 }
 
 func NewService(
@@ -68,6 +70,79 @@ func NewService(
 // SetBotManager sets the BotManager interface for dynamic bot management
 func (s *Service) SetBotManager(botManager BotManagerInterface) {
 	s.botManager = botManager
+}
+
+// updateCommands updates the command menu for all users (global commands)
+func (s *Service) updateCommands(_ context.Context, b *gotgbot.Bot) {
+	// Check cache to avoid frequent API calls
+	if _, exists := s.commandsCache.Load("commands_set"); exists {
+		return
+	}
+
+	// Include all commands for all users
+	var commands []gotgbot.BotCommand
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "help",
+		Description: "Show help message",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "addbot",
+		Description: "Register a new ForwarderBot",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "mybots",
+		Description: "List all your ForwarderBots",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "manage",
+		Description: "Open management menu",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "stats",
+		Description: "View global statistics",
+	})
+
+	// Set commands for private chats (default scope)
+	scope := gotgbot.BotCommandScopeDefault{}
+	opts := &gotgbot.SetMyCommandsOpts{
+		Scope: scope,
+	}
+
+	_, err := b.SetMyCommands(commands, opts)
+	if err != nil {
+		s.logger.Warn("Failed to set commands for private chats",
+			zap.Error(err))
+		return
+	}
+
+	// Set commands for group chats
+	groupScope := gotgbot.BotCommandScopeAllGroupChats{}
+	groupOpts := &gotgbot.SetMyCommandsOpts{
+		Scope: groupScope,
+	}
+
+	_, err = b.SetMyCommands(commands, groupOpts)
+	if err != nil {
+		s.logger.Warn("Failed to set commands for group chats",
+			zap.Error(err))
+		// Continue anyway, as private chat commands are already set
+	}
+
+	// Set global menu button to show commands (no chatID = global)
+	menuButton := gotgbot.MenuButtonCommands{}
+	_, err = b.SetChatMenuButton(&gotgbot.SetChatMenuButtonOpts{
+		MenuButton: menuButton,
+	})
+	if err != nil {
+		s.logger.Warn("Failed to set global menu button",
+			zap.Error(err))
+		// Don't return, as commands are already set
+	}
+
+	// Cache the update
+	s.commandsCache.Store("commands_set", true)
+	s.logger.Debug("Commands and menu button updated globally",
+		zap.Int("command_count", len(commands)))
 }
 
 func (s *Service) IsSuperuser(userID int64) bool {
@@ -124,6 +199,9 @@ func (s *Service) HandleCommand(ctx context.Context, b *gotgbot.Bot, update *ext
 	userID := update.EffectiveUser.Id
 	chatID := update.EffectiveChat.Id
 	command := update.EffectiveMessage.Text
+
+	// Update commands menu (global, only once)
+	s.updateCommands(ctx, b)
 
 	s.logger.Debug("ManagerBot command received",
 		zap.Int64("user_id", userID),
