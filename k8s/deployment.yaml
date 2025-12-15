@@ -91,6 +91,8 @@ stringData:
       url: ""
       username: ""
       password: ""
+    ad_filter:
+      enabled: false
 
 ---
 # PostgreSQL Deployment
