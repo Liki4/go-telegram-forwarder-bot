@@ -50,3 +50,8 @@ proxy:
   # Optional: proxy authentication password
   password: ""
 
+# Ad filter configuration
+# Block messages containing mentions (@username) or URLs (http/https links)
+ad_filter:
+  enabled: false  # Set to true to enable ad filtering
+
