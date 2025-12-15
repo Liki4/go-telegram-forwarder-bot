@@ -10,6 +10,7 @@ type Config struct {
 	Environment   string           `mapstructure:"environment"`
 	EncryptionKey string           `mapstructure:"encryption_key"` // Base64 encoded 32-byte key
 	Proxy         ProxyConfig      `mapstructure:"proxy"`
+	AdFilter      AdFilterConfig   `mapstructure:"ad_filter"`
 }
 
 type ManagerBotConfig struct {
@@ -50,4 +51,8 @@ type ProxyConfig struct {
 	URL      string `mapstructure:"url"`      // Proxy URL, e.g., "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
 	Username string `mapstructure:"username"` // Optional: proxy username
 	Password string `mapstructure:"password"` // Optional: proxy password
+}
+
+type AdFilterConfig struct {
+	Enabled bool `mapstructure:"enabled"` // Enable ad filtering (block messages with mentions or URLs)
 }
