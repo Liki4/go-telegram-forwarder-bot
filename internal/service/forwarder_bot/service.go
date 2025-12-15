@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"go-telegram-forwarder-bot/internal/config"
 	"go-telegram-forwarder-bot/internal/repository"
@@ -35,6 +36,7 @@ type Service struct {
 	config                       *config.Config
 	logger                       *zap.Logger
 	encryptionKey                []byte
+	commandsCache                sync.Map // Cache to track users whose commands have been updated
 }
 
 func NewService(
@@ -157,6 +159,103 @@ func (s *Service) IsManagerOrAdmin(userID int64) (bool, error) {
 	return s.IsAdmin(userID)
 }
 
+// updateCommands updates the command menu for all users (global commands)
+func (s *Service) updateCommands(_ context.Context, b *gotgbot.Bot) {
+	// Check cache to avoid frequent API calls
+	if _, exists := s.commandsCache.Load("commands_set"); exists {
+		return
+	}
+
+	// Include all commands for all users
+	var commands []gotgbot.BotCommand
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "help",
+		Description: "Show help message",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "addrecipient",
+		Description: "Add a recipient",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "delrecipient",
+		Description: "Remove a recipient",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "listrecipient",
+		Description: "List all recipients",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "addadmin",
+		Description: "Add an admin (Manager only)",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "deladmin",
+		Description: "Remove an admin (Manager only)",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "listadmins",
+		Description: "List all admins",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "stats",
+		Description: "View bot statistics",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "ban",
+		Description: "Ban a guest (reply to their message)",
+	})
+	commands = append(commands, gotgbot.BotCommand{
+		Command:     "unban",
+		Description: "Unban a guest (reply to their message, or use directly to request unban for yourself)",
+	})
+
+	// Set commands for private chats (default scope)
+	scope := gotgbot.BotCommandScopeDefault{}
+	opts := &gotgbot.SetMyCommandsOpts{
+		Scope: scope,
+	}
+
+	_, err := b.SetMyCommands(commands, opts)
+	if err != nil {
+		s.logger.Warn("Failed to set commands for private chats",
+			zap.String("bot_id", s.botID.String()),
+			zap.Error(err))
+		return
+	}
+
+	// Set commands for group chats
+	groupScope := gotgbot.BotCommandScopeAllGroupChats{}
+	groupOpts := &gotgbot.SetMyCommandsOpts{
+		Scope: groupScope,
+	}
+
+	_, err = b.SetMyCommands(commands, groupOpts)
+	if err != nil {
+		s.logger.Warn("Failed to set commands for group chats",
+			zap.String("bot_id", s.botID.String()),
+			zap.Error(err))
+		// Continue anyway, as private chat commands are already set
+	}
+
+	// Set global menu button to show commands (no chatID = global)
+	menuButton := gotgbot.MenuButtonCommands{}
+	_, err = b.SetChatMenuButton(&gotgbot.SetChatMenuButtonOpts{
+		MenuButton: menuButton,
+	})
+	if err != nil {
+		s.logger.Warn("Failed to set global menu button",
+			zap.String("bot_id", s.botID.String()),
+			zap.Error(err))
+		// Don't return, as commands are already set
+	}
+
+	// Cache the update
+	s.commandsCache.Store("commands_set", true)
+	s.logger.Debug("Commands and menu button updated globally",
+		zap.String("bot_id", s.botID.String()),
+		zap.Int("command_count", len(commands)))
+}
+
 // isSystemMessage checks if a message is a system message (e.g., user joined/left, chat title changed, etc.)
 // System messages cannot be forwarded and should be ignored
 func (s *Service) isSystemMessage(message *gotgbot.Message) bool {
@@ -209,11 +308,51 @@ func (s *Service) isSystemMessage(message *gotgbot.Message) bool {
 	return false
 }
 
+// containsAdContent checks if a message contains ad content (mentions or URLs)
+// Returns true if the message contains mentions or URLs, and a reason string
+func (s *Service) containsAdContent(message *gotgbot.Message) (bool, string) {
+	if message.Entities == nil || len(message.Entities) == 0 {
+		return false, ""
+	}
+
+	var hasMention bool
+	var hasLink bool
+
+	for _, entity := range message.Entities {
+		switch entity.Type {
+		case "mention", "text_mention":
+			hasMention = true
+		case "url", "text_link":
+			hasLink = true
+		}
+	}
+
+	if !hasMention && !hasLink {
+		return false, ""
+	}
+
+	var reasons []string
+	if hasMention {
+		reasons = append(reasons, "mention")
+	}
+	if hasLink {
+		reasons = append(reasons, "link")
+	}
+
+	reasonStr := strings.Join(reasons, " or ")
+	return true, reasonStr
+}
+
 func (s *Service) HandleMessage(ctx context.Context, b *gotgbot.Bot, update *ext.Context) error {
 	message := update.EffectiveMessage
 	chatID := update.EffectiveChat.Id
 	userID := update.EffectiveUser.Id
 	messageID := message.MessageId
+
+	// Update commands menu for user (only for private chats)
+	if update.EffectiveChat.Type == "private" {
+		s.updateCommands(ctx, b)
+	}
 
 	s.logger.Debug("ForwarderBot message received",
 		zap.String("bot_id", s.botID.String()),
@@ -269,6 +408,40 @@ func (s *Service) HandleMessage(ctx context.Context, b *gotgbot.Bot, update *ext
 		zap.String("bot_id", s.botID.String()),
 		zap.Int64("user_id", userID),
 		zap.Int64("message_id", messageID))
+
+	// Check for ad content if ad filter is enabled
+	if s.config.AdFilter.Enabled {
+		hasAd, reason := s.containsAdContent(message)
+		if hasAd {
+			s.logger.Debug("Message contains ad content, blocking",
+				zap.String("bot_id", s.botID.String()),
+				zap.Int64("user_id", userID),
+				zap.Int64("message_id", messageID),
+				zap.String("reason", reason))
+
+			// Notify guest about blocked message
+			var notificationText string
+			if reason == "mention" {
+				notificationText = "Your message was not forwarded because it contains a mention (@username)."
+			} else if reason == "link" {
+				notificationText = "Your message was not forwarded because it contains a link (http/https)."
+			} else if reason == "mention or link" {
+				notificationText = "Your message was not forwarded because it contains a mention (@username) or a link (http/https)."
+			} else {
+				notificationText = fmt.Sprintf("Your message was not forwarded because it contains %s.", reason)
+			}
+
+			_, err := b.SendMessage(chatID, notificationText, nil)
+			if err != nil {
+				s.logger.Warn("Failed to send ad filter notification",
+					zap.String("bot_id", s.botID.String()),
+					zap.Int64("user_id", userID),
+					zap.Int64("chat_id", chatID),
+					zap.Error(err))
+			}
+			return nil
+		}
+	}
 
 	// Forward message to all recipients
 	s.logger.Debug("Forwarding message to recipients",
@@ -424,6 +597,11 @@ func (s *Service) HandleCommand(ctx context.Context, b *gotgbot.Bot, update *ext
 
 	userID := update.EffectiveUser.Id
 	chatID := update.EffectiveChat.Id
+
+	// Update commands menu for user (only for private chats)
+	if update.EffectiveChat.Type == "private" {
+		s.updateCommands(ctx, b)
+	}
 
 	s.logger.Debug("ForwarderBot command received",
 		zap.String("bot_id", s.botID.String()),
