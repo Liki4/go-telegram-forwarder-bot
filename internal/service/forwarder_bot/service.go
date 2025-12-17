@@ -309,21 +309,33 @@ func (s *Service) isSystemMessage(message *gotgbot.Message) bool {
 }
 
 // containsAdContent checks if a message contains ad content (mentions or URLs)
+// Checks both Entities (for text messages) and CaptionEntities (for media messages)
 // Returns true if the message contains mentions or URLs, and a reason string
 func (s *Service) containsAdContent(message *gotgbot.Message) (bool, string) {
-	if message.Entities == nil || len(message.Entities) == 0 {
-		return false, ""
-	}
-
 	var hasMention bool
 	var hasLink bool
 
-	for _, entity := range message.Entities {
-		switch entity.Type {
-		case "mention", "text_mention":
-			hasMention = true
-		case "url", "text_link":
-			hasLink = true
+	// Check Entities (for text messages)
+	if message.Entities != nil && len(message.Entities) > 0 {
+		for _, entity := range message.Entities {
+			switch entity.Type {
+			case "mention", "text_mention":
+				hasMention = true
+			case "url", "text_link":
+				hasLink = true
+			}
+		}
+	}
+
+	// Check CaptionEntities (for media messages with captions)
+	if message.CaptionEntities != nil && len(message.CaptionEntities) > 0 {
+		for _, entity := range message.CaptionEntities {
+			switch entity.Type {
+			case "mention", "text_mention":
+				hasMention = true
+			case "url", "text_link":
+				hasLink = true
+			}
 		}
 	}
 
