@@ -26,7 +26,7 @@
 - **详细日志**：完整的 debug 级别日志，记录所有操作和状态变化
 - **消息映射**：完整记录所有消息的映射关系，支持复杂的双向对话场景
 - **智能黑名单**：正确处理 ban/unban 组合，确保黑名单状态准确
-- **广告拦截**：可配置的广告拦截功能，自动拦截包含 @用户名或链接的消息，防止广告骚扰
+- **广告拦截**：可配置的广告拦截功能，自动拦截包含 @用户名、链接、按钮或通过其他 Bot 发送的消息，防止广告骚扰
 
 ## 🏗️ 系统架构
 
@@ -194,7 +194,7 @@ proxy:
   password: ""            # 代理认证密码（可选）
 
 ad_filter:
-  enabled: false          # 是否启用广告拦截（拦截包含 @用户名 或链接的消息）
+  enabled: false          # 是否启用广告拦截（拦截包含 @用户名、链接、按钮或通过其他 Bot 发送的消息）
 ```
 
 ## 📖 使用指南
@@ -370,7 +370,7 @@ ForwarderBot 接收
     ↓
 检查黑名单 → 如果在黑名单，丢弃
     ↓
-检查广告内容（如果启用） → 如果包含 @用户名 或链接，拦截并通知用户
+检查广告内容（如果启用） → 如果包含 @用户名、链接、按钮或通过其他 Bot 发送，拦截并通知用户
     ↓
 检查限流 → 如果超限，延迟发送
     ↓
@@ -434,7 +434,13 @@ ForwarderBot 接收
 
 **拦截规则：**
 - 检测消息中的 `@用户名`（mention 或 text_mention 类型的 Entity）
+  - 支持纯文字消息（检查 `Entities`）
+  - 支持媒体消息的说明文字（检查 `CaptionEntities`）
 - 检测消息中的链接（url 或 text_link 类型的 Entity）
+  - 支持纯文字消息（检查 `Entities`）
+  - 支持媒体消息的说明文字（检查 `CaptionEntities`）
+- 检测消息中的按钮（ReplyMarkup，包括内联键盘按钮和回复键盘）
+- 检测通过其他 Bot 发送的消息（ViaBot）
 
 **工作流程：**
 ```
@@ -442,9 +448,13 @@ Guest 发送消息
     ↓
 检查广告拦截是否启用
     ↓
-如果启用，检查消息是否包含 @用户名 或链接
+如果启用，检查消息是否包含：
+  - @用户名（在文字或说明中）
+  - 链接（在文字或说明中）
+  - 按钮
+  - 通过其他 Bot 发送
     ↓
-如果包含，拦截消息并通知用户
+如果包含任何一项，拦截消息并通知用户
     ↓
 不转发消息
 ```
@@ -456,12 +466,15 @@ Guest 发送消息
 当消息被拦截时，系统会向发送者发送通知，说明拦截原因：
 - 包含 @用户名：`"Your message was not forwarded because it contains a mention (@username)."`
 - 包含链接：`"Your message was not forwarded because it contains a link (http/https)."`
-- 同时包含两者：`"Your message was not forwarded because it contains a mention (@username) or a link (http/https)."`
+- 包含按钮：`"Your message was not forwarded because it contains buttons."`
+- 通过其他 Bot 发送：`"Your message was not forwarded because it was sent via another bot."`
+- 包含多项：`"Your message was not forwarded because it contains mention, link, button, via bot."`（根据实际情况组合）
 
 **注意事项：**
 - 广告拦截只对 Guest 发送的消息生效
 - 命令和回复消息不受广告拦截影响
 - 系统消息（如进群/离群）会被系统消息过滤器处理，不会触发广告拦截
+- 支持检测纯文字消息和带说明的媒体消息（图片、视频等）
 
 ## 🧪 测试
 
@@ -549,7 +562,7 @@ go-telegram-forwarder-bot/
 7. **输入验证**：所有用户输入都经过验证和清理
 8. **消息映射安全**：通过消息映射准确识别用户，防止误操作
 9. **黑名单逻辑**：正确处理 ban/unban 组合，确保状态准确
-10. **广告拦截**：可配置的广告拦截功能，自动拦截包含 @用户名 或链接的消息，防止广告骚扰
+10. **广告拦截**：可配置的广告拦截功能，自动拦截包含 @用户名、链接、按钮或通过其他 Bot 发送的消息，防止广告骚扰
 
 ## 🐛 故障排除
 
@@ -638,7 +651,11 @@ go-telegram-forwarder-bot/
 
 **拦截规则：**
 - 拦截包含 `@用户名` 的消息（mention 或 text_mention 类型的 Entity）
+  - 支持纯文字消息和媒体消息的说明文字
 - 拦截包含链接的消息（url 或 text_link 类型的 Entity）
+  - 支持纯文字消息和媒体消息的说明文字
+- 拦截包含按钮的消息（ReplyMarkup，包括内联键盘按钮和回复键盘）
+- 拦截通过其他 Bot 发送的消息（ViaBot）
 
 **注意事项：**
 - 广告拦截只对 Guest 发送的普通消息生效
@@ -646,6 +663,7 @@ go-telegram-forwarder-bot/
 - 回复消息不受广告拦截影响
 - 系统消息会被系统消息过滤器处理，不会触发广告拦截
 - 被拦截的消息会向发送者发送通知，说明拦截原因
+- 支持检测纯文字消息和带说明的媒体消息（图片、视频等）
 
 **禁用广告拦截：**
 设置 `ad_filter.enabled: false` 或删除该配置项（默认为 false）。
