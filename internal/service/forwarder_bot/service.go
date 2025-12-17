@@ -308,15 +308,18 @@ func (s *Service) isSystemMessage(message *gotgbot.Message) bool {
 	return false
 }
 
-// containsAdContent checks if a message contains ad content (mentions or URLs)
+// containsAdContent checks if a message contains ad content (mentions, URLs, buttons, or via bot)
 // Checks both Entities (for text messages) and CaptionEntities (for media messages)
-// Returns true if the message contains mentions or URLs, and a reason string
+// Also checks for ReplyMarkup (inline keyboard buttons or reply keyboard) and ViaBot
+// Returns true if the message contains mentions, URLs, buttons, or via bot, and a reason string
 func (s *Service) containsAdContent(message *gotgbot.Message) (bool, string) {
 	var hasMention bool
 	var hasLink bool
+	var hasButton bool
+	var hasViaBot bool
 
 	// Check Entities (for text messages)
-	if message.Entities != nil && len(message.Entities) > 0 {
+	if len(message.Entities) > 0 {
 		for _, entity := range message.Entities {
 			switch entity.Type {
 			case "mention", "text_mention":
@@ -328,7 +331,7 @@ func (s *Service) containsAdContent(message *gotgbot.Message) (bool, string) {
 	}
 
 	// Check CaptionEntities (for media messages with captions)
-	if message.CaptionEntities != nil && len(message.CaptionEntities) > 0 {
+	if len(message.CaptionEntities) > 0 {
 		for _, entity := range message.CaptionEntities {
 			switch entity.Type {
 			case "mention", "text_mention":
@@ -339,7 +342,17 @@ func (s *Service) containsAdContent(message *gotgbot.Message) (bool, string) {
 		}
 	}
 
-	if !hasMention && !hasLink {
+	// Check for buttons (ReplyMarkup)
+	if message.ReplyMarkup != nil {
+		hasButton = true
+	}
+
+	// Check for ViaBot (message sent via another bot)
+	if message.ViaBot != nil {
+		hasViaBot = true
+	}
+
+	if !hasMention && !hasLink && !hasButton && !hasViaBot {
 		return false, ""
 	}
 
@@ -349,6 +362,12 @@ func (s *Service) containsAdContent(message *gotgbot.Message) (bool, string) {
 	}
 	if hasLink {
 		reasons = append(reasons, "link")
+	}
+	if hasButton {
+		reasons = append(reasons, "button")
+	}
+	if hasViaBot {
+		reasons = append(reasons, "via bot")
 	}
 
 	reasonStr := strings.Join(reasons, " or ")
@@ -433,14 +452,19 @@ func (s *Service) HandleMessage(ctx context.Context, b *gotgbot.Bot, update *ext
 
 			// Notify guest about blocked message
 			var notificationText string
-			if reason == "mention" {
+			switch reason {
+			case "mention":
 				notificationText = "Your message was not forwarded because it contains a mention (@username)."
-			} else if reason == "link" {
+			case "link":
 				notificationText = "Your message was not forwarded because it contains a link (http/https)."
-			} else if reason == "mention or link" {
-				notificationText = "Your message was not forwarded because it contains a mention (@username) or a link (http/https)."
-			} else {
-				notificationText = fmt.Sprintf("Your message was not forwarded because it contains %s.", reason)
+			case "button":
+				notificationText = "Your message was not forwarded because it contains buttons."
+			case "via bot":
+				notificationText = "Your message was not forwarded because it was sent via another bot."
+			default:
+				// Handle combinations: replace " or " with ", " for better readability
+				reasonDisplay := strings.ReplaceAll(reason, " or ", ", ")
+				notificationText = fmt.Sprintf("Your message was not forwarded because it contains %s.", reasonDisplay)
 			}
 
 			_, err := b.SendMessage(chatID, notificationText, nil)
