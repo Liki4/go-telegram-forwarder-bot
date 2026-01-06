@@ -3,6 +3,7 @@ package forwarder_bot
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -311,6 +312,7 @@ func (s *Service) isSystemMessage(message *gotgbot.Message) bool {
 // containsAdContent checks if a message contains ad content (mentions, URLs, buttons, or via bot)
 // Checks both Entities (for text messages) and CaptionEntities (for media messages)
 // Also checks for ReplyMarkup (inline keyboard buttons or reply keyboard) and ViaBot
+// Also checks Quote.Text if ExternalReply is present (for quoted parts of external replied messages)
 // Returns true if the message contains mentions, URLs, buttons, or via bot, and a reason string
 func (s *Service) containsAdContent(message *gotgbot.Message) (bool, string) {
 	var hasMention bool
@@ -350,6 +352,52 @@ func (s *Service) containsAdContent(message *gotgbot.Message) (bool, string) {
 	// Check for ViaBot (message sent via another bot)
 	if message.ViaBot != nil {
 		hasViaBot = true
+	}
+
+	// Check Quote if ExternalReply is present (for quoted parts of external replied messages)
+	// ExternalReply indicates the message is replying to a message from another chat or forum topic
+	// We first check Quote.Entities for mention/url entities (more accurate)
+	// If not found, we use regex to check Quote.Text for @username patterns and URLs
+	if message.ExternalReply != nil && message.Quote != nil {
+		// First, check Quote.Entities for mention/url entities (if available)
+		// Note: According to Telegram API docs, Quote.Entities usually only contains format entities,
+		// but we check it first for accuracy if Telegram includes mention/url entities
+		if len(message.Quote.Entities) > 0 {
+			for _, entity := range message.Quote.Entities {
+				switch entity.Type {
+				case "mention", "text_mention":
+					hasMention = true
+				case "url", "text_link":
+					hasLink = true
+				}
+			}
+		}
+
+		// If no mention/url entities found in Quote.Entities, check Quote.Text with regex
+		// This is more accurate than simple string contains, avoiding false positives like email addresses
+		if message.Quote.Text != "" && (!hasMention || !hasLink) {
+			quoteText := message.Quote.Text
+
+			// Use regex to match @username pattern (e.g., @username, @user_name, @user123)
+			// Pattern: @ followed by alphanumeric characters, underscores, and dots (Telegram username rules)
+			// This avoids matching email addresses like user@example.com
+			if !hasMention {
+				mentionPattern := regexp.MustCompile(`@[a-zA-Z0-9_]{1,32}(?:\.[a-zA-Z0-9_]{1,32})*`)
+				if mentionPattern.MatchString(quoteText) {
+					hasMention = true
+				}
+			}
+
+			// Use regex to match URLs (http:// or https:// followed by valid URL characters)
+			// Pattern matches http:// or https:// followed by valid URL characters
+			// Excludes common delimiters and whitespace
+			if !hasLink {
+				urlPattern := regexp.MustCompile(`https?://[^\s<>"{}|\\^\[\]]+`)
+				if urlPattern.MatchString(quoteText) {
+					hasLink = true
+				}
+			}
+		}
 	}
 
 	if !hasMention && !hasLink && !hasButton && !hasViaBot {
