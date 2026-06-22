@@ -11,6 +11,7 @@ type Config struct {
 	EncryptionKey string           `mapstructure:"encryption_key"` // Base64 encoded 32-byte key
 	Proxy         ProxyConfig      `mapstructure:"proxy"`
 	AdFilter      AdFilterConfig   `mapstructure:"ad_filter"`
+	LLMAdFilter   LLMAdFilterConfig `mapstructure:"llm_ad_filter"`
 }
 
 type ManagerBotConfig struct {
@@ -55,4 +56,18 @@ type ProxyConfig struct {
 
 type AdFilterConfig struct {
 	Enabled bool `mapstructure:"enabled"` // Enable ad filtering (block messages with mentions or URLs)
+}
+
+// LLMAdFilterConfig configures the optional LLM-based ad classifier that
+// inspects messages which passed the rule-based AdFilter. The feature is
+// opt-in per ForwarderBot (Superuser-controlled) and only runs when both
+// this block is configured AND the bot has LLMAdFilterEnabled set.
+type LLMAdFilterConfig struct {
+	Provider           string `mapstructure:"provider"`             // "anthropic" or "openai" (OpenAI-compatible: gpt-*, vLLM, ollama, OpenRouter, ...)
+	APIKey             string `mapstructure:"api_key"`
+	BaseURL            string `mapstructure:"base_url"`             // optional; overrides default endpoint
+	Model              string `mapstructure:"model"`                // e.g., "claude-opus-4-8", "claude-haiku-4-5-20251001", "gpt-4o-mini"
+	TimeoutSeconds     int    `mapstructure:"timeout_seconds"`      // request timeout; default 10
+	MaxTextChars       int    `mapstructure:"max_text_chars"`       // truncate message text before sending; default 500
+	BatchWindowSeconds int    `mapstructure:"batch_window_seconds"` // coalesce Guest messages over this window before judging; default 5
 }

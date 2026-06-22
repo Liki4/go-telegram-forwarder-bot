@@ -2,13 +2,17 @@ package forwarder_bot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"go-telegram-forwarder-bot/internal/config"
+	"go-telegram-forwarder-bot/internal/models"
 	"go-telegram-forwarder-bot/internal/repository"
+	"go-telegram-forwarder-bot/internal/service/adfilter"
 	"go-telegram-forwarder-bot/internal/service/blacklist"
 	"go-telegram-forwarder-bot/internal/service/message"
 	"go-telegram-forwarder-bot/internal/service/statistics"
@@ -34,6 +38,7 @@ type Service struct {
 	messageForwarder             *message.Forwarder
 	blacklistService             *blacklist.Service
 	statsService                 *statistics.Service
+	llmBatcher                   *adfilter.Batcher
 	config                       *config.Config
 	logger                       *zap.Logger
 	encryptionKey                []byte
@@ -54,6 +59,7 @@ func NewService(
 	messageForwarder *message.Forwarder,
 	blacklistService *blacklist.Service,
 	statsService *statistics.Service,
+	llmBatcher *adfilter.Batcher,
 	cfg *config.Config,
 	logger *zap.Logger,
 ) (*Service, error) {
@@ -76,6 +82,7 @@ func NewService(
 		messageForwarder:             messageForwarder,
 		blacklistService:             blacklistService,
 		statsService:                 statsService,
+		llmBatcher:                   llmBatcher,
 		config:                       cfg,
 		logger:                       logger,
 		encryptionKey:                key,
@@ -422,6 +429,98 @@ func (s *Service) containsAdContent(message *gotgbot.Message) (bool, string) {
 	return true, reasonStr
 }
 
+// enqueueLLMBatch hands this message to the LLM ad-filter batcher and
+// returns immediately. Forwarding (or rejection) happens later when the
+// batcher's window closes and the judge has decided.
+//
+// On NORMAL: messageForwarder.ForwardToRecipients runs from the batcher's
+// goroutine, just as it would have synchronously.
+// On AD: every message in the batch is dropped and audit-logged; the Guest
+// receives a single notification (delivered via the first item's OnReject).
+func (s *Service) enqueueLLMBatch(b *gotgbot.Bot, message *gotgbot.Message, userID, chatID, messageID int64) {
+	text := strings.TrimSpace(message.Text)
+	if text == "" {
+		text = strings.TrimSpace(message.Caption)
+	}
+
+	approve := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		result, err := s.messageForwarder.ForwardToRecipients(ctx, b, s.botID, chatID, message)
+		if err != nil {
+			s.logger.Error("LLM ad filter: forward after approve failed",
+				zap.String("bot_id", s.botID.String()),
+				zap.Int64("message_id", messageID),
+				zap.Error(err))
+			return
+		}
+		if result != nil && result.FailureCount > 0 {
+			s.logger.Warn("LLM ad filter: some recipients failed after approve",
+				zap.String("bot_id", s.botID.String()),
+				zap.Int64("message_id", messageID),
+				zap.Int("success", result.SuccessCount),
+				zap.Int("failures", result.FailureCount))
+		}
+	}
+
+	reject := func(meta adfilter.RejectMeta) {
+		s.writeLLMAdAuditLog(userID, messageID, meta.Reason, text)
+		if !meta.IsFirst {
+			return
+		}
+		notice := "Your message was not forwarded because it was identified as advertising content."
+		if meta.BatchSize > 1 {
+			notice = fmt.Sprintf(
+				"%d of your recent messages were not forwarded because they were identified as advertising content.",
+				meta.BatchSize,
+			)
+		}
+		if _, err := b.SendMessage(chatID, notice, nil); err != nil {
+			s.logger.Warn("LLM ad filter: failed to send block notification",
+				zap.String("bot_id", s.botID.String()),
+				zap.Int64("chat_id", chatID),
+				zap.Error(err))
+		}
+	}
+
+	s.llmBatcher.Submit(
+		adfilter.BatchKey{BotID: s.botID, UserID: userID},
+		&adfilter.BatchedItem{Text: text, OnApprove: approve, OnReject: reject},
+	)
+}
+
+func (s *Service) writeLLMAdAuditLog(userID, messageID int64, reason, truncatedText string) {
+	user, err := s.userRepo.GetByTelegramUserID(userID)
+	if err != nil || user == nil {
+		return
+	}
+	details, _ := json.Marshal(map[string]interface{}{
+		"bot_id":         s.botID.String(),
+		"guest_user_id":  userID,
+		"message_id":     messageID,
+		"reason":         reason,
+		"truncated_text": truncateForAudit(truncatedText),
+	})
+	if logErr := s.auditLogRepo.Create(&models.AuditLog{
+		UserID:       &user.ID,
+		ActionType:   models.AuditLogActionLLMAdBlocked,
+		ResourceType: "forwarder_bot",
+		ResourceID:   s.botID,
+		Details:      string(details),
+	}); logErr != nil {
+		s.logger.Warn("LLM ad filter: failed to write audit log", zap.Error(logErr))
+	}
+}
+
+func truncateForAudit(s string) string {
+	const max = 500
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…"
+}
+
 func (s *Service) HandleMessage(ctx context.Context, b *gotgbot.Bot, update *ext.Context) error {
 	message := update.EffectiveMessage
 	chatID := update.EffectiveChat.Id
@@ -523,6 +622,25 @@ func (s *Service) HandleMessage(ctx context.Context, b *gotgbot.Bot, update *ext
 					zap.Int64("chat_id", chatID),
 					zap.Error(err))
 			}
+			return nil
+		}
+	}
+
+	// Second-tier ad filter: LLM judge for messages that passed rule-based checks.
+	// Only runs when the batcher is configured AND this bot has the per-bot
+	// toggle on (Superuser-controlled via /manage). The batcher buffers
+	// messages from this Guest for a few seconds, judges them as a group,
+	// then either forwards them all or drops the whole batch. Fail-open on
+	// LLM errors. Return here so the message is NOT forwarded synchronously
+	// — the batcher dispatches forwarding later from its own goroutine.
+	if s.llmBatcher != nil {
+		bot, err := s.botRepo.GetByID(s.botID)
+		if err != nil {
+			s.logger.Warn("LLM ad filter: failed to load bot record, skipping batch",
+				zap.String("bot_id", s.botID.String()),
+				zap.Error(err))
+		} else if bot.LLMAdFilterEnabled {
+			s.enqueueLLMBatch(b, message, userID, chatID, messageID)
 			return nil
 		}
 	}

@@ -69,6 +69,14 @@ func setDefaults() {
 	viper.SetDefault("proxy.password", "")
 
 	viper.SetDefault("ad_filter.enabled", false)
+
+	viper.SetDefault("llm_ad_filter.provider", "")
+	viper.SetDefault("llm_ad_filter.api_key", "")
+	viper.SetDefault("llm_ad_filter.base_url", "")
+	viper.SetDefault("llm_ad_filter.model", "")
+	viper.SetDefault("llm_ad_filter.timeout_seconds", 10)
+	viper.SetDefault("llm_ad_filter.max_text_chars", 500)
+	viper.SetDefault("llm_ad_filter.batch_window_seconds", 5)
 }
 
 func validate(cfg *Config) error {
@@ -125,6 +133,29 @@ func validate(cfg *Config) error {
 	// If output is file or both, file_path is required
 	if (cfg.Log.Output == "file" || cfg.Log.Output == "both") && cfg.Log.FilePath == "" {
 		return fmt.Errorf("log.file_path is required when log.output is file or both")
+	}
+
+	// llm_ad_filter is fully optional. When any field is set we expect a usable
+	// configuration; we validate the minimum required fields together so a
+	// half-filled block fails fast instead of failing per-request later.
+	if cfg.LLMAdFilter.Provider != "" || cfg.LLMAdFilter.APIKey != "" || cfg.LLMAdFilter.Model != "" {
+		if cfg.LLMAdFilter.Provider == "" {
+			return fmt.Errorf("llm_ad_filter.provider is required when llm_ad_filter is configured")
+		}
+		switch cfg.LLMAdFilter.Provider {
+		case "anthropic", "claude", "openai":
+		default:
+			return fmt.Errorf("llm_ad_filter.provider must be \"anthropic\" or \"openai\"")
+		}
+		if cfg.LLMAdFilter.APIKey == "" {
+			return fmt.Errorf("llm_ad_filter.api_key is required when llm_ad_filter is configured")
+		}
+		if cfg.LLMAdFilter.Model == "" {
+			return fmt.Errorf("llm_ad_filter.model is required when llm_ad_filter is configured")
+		}
+		if cfg.LLMAdFilter.BatchWindowSeconds < 0 {
+			return fmt.Errorf("llm_ad_filter.batch_window_seconds must be >= 0")
+		}
 	}
 
 	return nil

@@ -10,14 +10,16 @@ import (
 type AuditLogAction string
 
 const (
-	AuditLogActionAddBot       AuditLogAction = "add_bot"
-	AuditLogActionDeleteBot    AuditLogAction = "delete_bot"
-	AuditLogActionBan          AuditLogAction = "ban"
-	AuditLogActionUnban        AuditLogAction = "unban"
-	AuditLogActionAddAdmin     AuditLogAction = "add_admin"
-	AuditLogActionDelAdmin     AuditLogAction = "del_admin"
-	AuditLogActionAddRecipient AuditLogAction = "add_recipient"
-	AuditLogActionDelRecipient AuditLogAction = "del_recipient"
+	AuditLogActionAddBot              AuditLogAction = "add_bot"
+	AuditLogActionDeleteBot           AuditLogAction = "delete_bot"
+	AuditLogActionBan                 AuditLogAction = "ban"
+	AuditLogActionUnban               AuditLogAction = "unban"
+	AuditLogActionAddAdmin            AuditLogAction = "add_admin"
+	AuditLogActionDelAdmin            AuditLogAction = "del_admin"
+	AuditLogActionAddRecipient        AuditLogAction = "add_recipient"
+	AuditLogActionDelRecipient        AuditLogAction = "del_recipient"
+	AuditLogActionLLMAdFilterToggle   AuditLogAction = "llm_ad_filter_toggle"
+	AuditLogActionLLMAdBlocked        AuditLogAction = "llm_ad_blocked"
 )
 
 type AuditLog struct {

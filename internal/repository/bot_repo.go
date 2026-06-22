@@ -14,6 +14,7 @@ type BotRepository interface {
 	Update(bot *models.ForwarderBot) error
 	Delete(id uuid.UUID) error
 	GetByToken(token string) (*models.ForwarderBot, error)
+	SetLLMAdFilterEnabled(id uuid.UUID, enabled bool) error
 	WithTx(tx *gorm.DB) BotRepository
 }
 
@@ -67,6 +68,12 @@ func (r *botRepository) GetByToken(token string) (*models.ForwarderBot, error) {
 		return nil, err
 	}
 	return &bot, nil
+}
+
+func (r *botRepository) SetLLMAdFilterEnabled(id uuid.UUID, enabled bool) error {
+	return r.db.Model(&models.ForwarderBot{}).
+		Where("id = ?", id).
+		Update("llm_ad_filter_enabled", enabled).Error
 }
 
 func (r *botRepository) WithTx(tx *gorm.DB) BotRepository {

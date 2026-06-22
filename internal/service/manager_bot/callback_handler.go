@@ -651,6 +651,14 @@ func (s *Service) handleViewBot(ctx context.Context, b *gotgbot.Bot, update *ext
 		bot.CreatedAt.Format("2006-01-02 15:04:05"),
 	)
 
+	if isSuperuser {
+		state := "OFF"
+		if bot.LLMAdFilterEnabled {
+			state = "ON"
+		}
+		message += fmt.Sprintf("\nLLM Ad Filter: *%s*", state)
+	}
+
 	if stats != nil {
 		message += fmt.Sprintf(
 			"\n\n*Statistics*\n"+
@@ -665,6 +673,21 @@ func (s *Service) handleViewBot(ctx context.Context, b *gotgbot.Bot, update *ext
 
 	// Only show Delete Bot button if user is the manager or superuser
 	buttons := [][]gotgbot.InlineKeyboardButton{}
+	if isSuperuser {
+		// Superuser-only: toggle the per-bot LLM ad filter
+		var label string
+		if bot.LLMAdFilterEnabled {
+			label = "Disable LLM Ad Filter"
+		} else {
+			label = "Enable LLM Ad Filter"
+		}
+		buttons = append(buttons, []gotgbot.InlineKeyboardButton{
+			{
+				Text:         label,
+				CallbackData: fmt.Sprintf("llm_filter:toggle:%s", botID.String()),
+			},
+		})
+	}
 	if isManager || isSuperuser {
 		buttons = append(buttons, []gotgbot.InlineKeyboardButton{
 			{
@@ -859,3 +882,86 @@ func (s *Service) handleConfirmDeleteBot(ctx context.Context, b *gotgbot.Bot, up
 	}
 	return err
 }
+
+// handleLLMFilterCallback handles the Superuser-only "llm_filter:toggle:<bot_id>"
+// callback. Permission is checked by the dispatcher in HandleCallback; this
+// function trusts that caller. Flips the per-bot LLMAdFilterEnabled flag,
+// writes an audit log, and re-renders the View Bot page so the button label
+// updates in place.
+func (s *Service) handleLLMFilterCallback(ctx context.Context, b *gotgbot.Bot, update *ext.Context, parts []string) error {
+	if len(parts) < 2 || parts[0] != "toggle" {
+		_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "Invalid request.",
+		})
+		return err
+	}
+
+	botID, err := uuid.Parse(parts[1])
+	if err != nil {
+		_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "Invalid bot ID.",
+		})
+		return err
+	}
+
+	bot, err := s.botRepo.GetByID(botID)
+	if err != nil {
+		s.logger.Error("Failed to load bot for LLM filter toggle", zap.Error(err))
+		_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "Failed to load bot.",
+		})
+		return err
+	}
+
+	newState := !bot.LLMAdFilterEnabled
+	if err := s.botRepo.SetLLMAdFilterEnabled(botID, newState); err != nil {
+		s.logger.Error("Failed to update LLM ad filter flag",
+			zap.String("bot_id", botID.String()),
+			zap.Error(err))
+		_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "Failed to update setting.",
+		})
+		return err
+	}
+
+	s.logger.Info("LLM ad filter toggled",
+		zap.String("bot_id", botID.String()),
+		zap.Int64("by_user_id", update.EffectiveUser.Id),
+		zap.Bool("enabled", newState))
+
+	// Audit log
+	username := update.EffectiveUser.Username
+	var usernamePtr *string
+	if username != "" {
+		usernamePtr = &username
+	}
+	if actor, uerr := s.userRepo.GetOrCreateByTelegramUserID(update.EffectiveUser.Id, usernamePtr); uerr == nil && actor != nil {
+		details, _ := json.Marshal(map[string]interface{}{
+			"bot_id":  botID.String(),
+			"enabled": newState,
+		})
+		if logErr := s.auditLogRepo.Create(&models.AuditLog{
+			UserID:       &actor.ID,
+			ActionType:   models.AuditLogActionLLMAdFilterToggle,
+			ResourceType: "forwarder_bot",
+			ResourceID:   botID,
+			Details:      string(details),
+		}); logErr != nil {
+			s.logger.Warn("Failed to write LLM ad filter audit log", zap.Error(logErr))
+		}
+	}
+
+	toast := "LLM Ad Filter disabled."
+	if newState {
+		toast = "LLM Ad Filter enabled."
+	}
+	if _, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+		Text: toast,
+	}); err != nil {
+		s.logger.Warn("Failed to answer callback query", zap.Error(err))
+	}
+
+	// Re-render the View Bot page so the toggle label flips in place.
+	return s.handleViewBot(ctx, b, update, botID)
+}
+

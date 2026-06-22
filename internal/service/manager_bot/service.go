@@ -368,6 +368,17 @@ func (s *Service) HandleCallback(ctx context.Context, b *gotgbot.Bot, update *ex
 			zap.Int64("user_id", userID),
 			zap.Strings("sub_parts", parts[1:]))
 		err = s.handleDeleteBotCallback(ctx, b, update, parts[1:])
+	case "llm_filter":
+		// Superuser-only: per-bot LLM ad filter toggle
+		if !s.IsSuperuser(userID) {
+			s.logger.Debug("Access denied for llm_filter callback",
+				zap.Int64("user_id", userID))
+			_, err := b.AnswerCallbackQuery(update.CallbackQuery.Id, &gotgbot.AnswerCallbackQueryOpts{
+				Text: "You are not authorized to access this.",
+			})
+			return err
+		}
+		err = s.handleLLMFilterCallback(ctx, b, update, parts[1:])
 	case "mybots":
 		// Handle mybots callback to return to /mybots list
 		// Only allow "list" action for now

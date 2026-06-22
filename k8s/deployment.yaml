@@ -13,13 +13,15 @@
 #    - /data/telegram-forwarder-bot/redis (Redis data)
 #    - /data/telegram-forwarder-bot/logs (Bot logs)
 # 2. db-secrets Secret: Change postgres-password and redis-password to secure values
-# 3. bot-config Secret: 
+# 3. bot-config Secret:
 #    - Update manager_bot.token with your actual Telegram bot token
 #    - Update manager_bot.superusers with your Telegram user IDs
 #    - Update database.dsn password to match db-secrets postgres-password
 #    - Update redis.password to match db-secrets redis-password
 #    - Update encryption_key with a base64-encoded 32-byte key (generate with: openssl rand -base64 32)
 #    - Configure proxy settings if needed
+#    - (Optional) Set llm_ad_filter.api_key + provider/model to enable the LLM ad classifier
+#      Then turn it on per-bot via the ManagerBot /manage menu (Superuser only).
 
 ---
 # Namespace
@@ -93,6 +95,21 @@ stringData:
       password: ""
     ad_filter:
       enabled: false
+
+    # Optional LLM-based ad classifier (second tier — runs AFTER ad_filter).
+    # Per-bot toggle is controlled by Superusers via /manage → View Bot.
+    # Messages are batched per Guest over batch_window_seconds and judged
+    # as a group, so multi-message ads are caught when concatenated.
+    # Cost: every Guest message is delayed by batch_window_seconds.
+    # Leave the block empty to disable the feature globally.
+    # llm_ad_filter:
+    #   provider: "anthropic"          # "anthropic" or "openai"
+    #   api_key: "REPLACE_ME"
+    #   model: "claude-opus-4-8"       # or "claude-haiku-4-5-20251001" for cost-sensitive workloads
+    #   base_url: ""                   # optional; for OpenAI-compatible endpoints
+    #   timeout_seconds: 10
+    #   max_text_chars: 500
+    #   batch_window_seconds: 5
 
 ---
 # PostgreSQL Deployment

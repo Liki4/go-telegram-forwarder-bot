@@ -55,3 +55,39 @@ proxy:
 ad_filter:
   enabled: false  # Set to true to enable ad filtering
 
+# Optional LLM-based ad classifier (second layer, runs after ad_filter).
+# Inspects plain-text messages that passed the rule-based ad_filter — catches
+# things rules can't, like VPN / channel-trading / cryptocurrency promotion.
+#
+# Messages from the same Guest are *batched* over a short window and judged
+# as a group, so multi-message ads ("hey check this out" / "VPN service" /
+# "contact me") that look fine one-by-one are caught when concatenated.
+# Cost of batching: every Guest message is delayed by batch_window_seconds
+# before it reaches the recipients.
+#
+# This block configures the provider globally. The per-bot toggle is then
+# controlled by Superusers via the /manage menu (View Bot → "Enable LLM Ad
+# Filter"). When the global config is empty, the per-bot toggle is a no-op.
+#
+# Fail-open: if the LLM call errors or times out, the batch is forwarded as
+# normal and the failure is logged.
+#
+# llm_ad_filter:
+#   provider: "anthropic"          # "anthropic" or "openai" (OpenAI-compatible)
+#   api_key: "sk-ant-..."
+#   model: "claude-opus-4-8"       # for cost-sensitive workloads: "claude-haiku-4-5-20251001"
+#   # base_url: ""                 # optional; override endpoint (e.g. self-hosted OpenAI-compatible)
+#   timeout_seconds: 10            # per-request timeout; default 10
+#   max_text_chars: 500            # truncate message text before sending; default 500
+#   batch_window_seconds: 5        # buffer Guest messages for N seconds; default 5
+#
+# OpenAI / OpenAI-compatible example (also covers vLLM, ollama, OpenRouter, etc.):
+# llm_ad_filter:
+#   provider: "openai"
+#   api_key: "sk-..."
+#   model: "gpt-4o-mini"
+#   base_url: "https://api.openai.com/v1"   # or e.g. "http://localhost:11434/v1" for ollama
+#   timeout_seconds: 10
+#   max_text_chars: 500
+#   batch_window_seconds: 5
+

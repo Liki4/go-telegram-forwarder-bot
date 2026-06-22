@@ -8,6 +8,7 @@ import (
 	"go-telegram-forwarder-bot/internal/config"
 	"go-telegram-forwarder-bot/internal/repository"
 	"go-telegram-forwarder-bot/internal/service"
+	"go-telegram-forwarder-bot/internal/service/adfilter"
 	"go-telegram-forwarder-bot/internal/service/blacklist"
 	"go-telegram-forwarder-bot/internal/service/forwarder_bot"
 	"go-telegram-forwarder-bot/internal/service/message"
@@ -37,6 +38,7 @@ type BotManagerParams struct {
 	RetryHandler                 *message.RetryHandler
 	ErrorNotifier                *service.ErrorNotifier
 	ManagerNotifier              *service.ManagerNotifier
+	LLMBatcher                   *adfilter.Batcher // nil when llm_ad_filter is not configured
 	Config                       *config.Config
 	Logger                       *zap.Logger
 }
@@ -62,6 +64,7 @@ type BotManager struct {
 	retryHandler                 *message.RetryHandler
 	errorNotifier                *service.ErrorNotifier
 	managerNotifier              *service.ManagerNotifier
+	llmBatcher                   *adfilter.Batcher
 	config                       *config.Config
 	logger                       *zap.Logger
 	encryptionKey                []byte
@@ -94,6 +97,7 @@ func NewBotManager(params BotManagerParams) (*BotManager, error) {
 		retryHandler:                 params.RetryHandler,
 		errorNotifier:                params.ErrorNotifier,
 		managerNotifier:              params.ManagerNotifier,
+		llmBatcher:                   params.LLMBatcher,
 		config:                       params.Config,
 		logger:                       params.Logger,
 		encryptionKey:                encryptionKey,
@@ -194,6 +198,7 @@ func (bm *BotManager) startBot(botID uuid.UUID) error {
 		botMessageForwarder,
 		bm.blacklistService,
 		bm.statsService,
+		bm.llmBatcher,
 		bm.config,
 		bm.logger,
 	)

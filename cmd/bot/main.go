@@ -19,6 +19,7 @@ import (
 	"go-telegram-forwarder-bot/internal/logger"
 	"go-telegram-forwarder-bot/internal/repository"
 	"go-telegram-forwarder-bot/internal/service"
+	"go-telegram-forwarder-bot/internal/service/adfilter"
 	"go-telegram-forwarder-bot/internal/service/blacklist"
 	"go-telegram-forwarder-bot/internal/service/manager_bot"
 	"go-telegram-forwarder-bot/internal/service/message"
@@ -150,6 +151,23 @@ func main() {
 	managerNotifier := service.NewManagerNotifier(managerBotInstance.GetBot(), botRepo, userRepo, log)
 	messageForwarder.SetManagerNotifier(managerNotifier)
 
+	// Optional LLM ad-filter judge + batcher. Both stay nil when
+	// llm_ad_filter is not configured — in that case the per-bot Superuser
+	// toggle is a no-op and no LLM calls happen.
+	llmJudge, err := adfilter.NewJudge(&cfg.LLMAdFilter, &cfg.Proxy, log)
+	if err != nil {
+		log.Fatal("Failed to build LLM ad-filter judge", zap.Error(err))
+	}
+	var llmBatcher *adfilter.Batcher
+	if llmJudge != nil {
+		window := time.Duration(cfg.LLMAdFilter.BatchWindowSeconds) * time.Second
+		llmBatcher = adfilter.NewBatcher(llmJudge, window, log)
+		log.Info("LLM ad-filter judge enabled",
+			zap.String("provider", cfg.LLMAdFilter.Provider),
+			zap.String("model", cfg.LLMAdFilter.Model),
+			zap.Duration("batch_window", window))
+	}
+
 	// Monitor Redis connection in runtime (if enabled)
 	// Use a pointer to allow updating redisClient in the monitor function
 	redisClientPtr := &redisClient
@@ -176,6 +194,7 @@ func main() {
 		RetryHandler:                 retryHandler,
 		ErrorNotifier:                errorNotifier,
 		ManagerNotifier:              managerNotifier,
+		LLMBatcher:                   llmBatcher,
 		Config:                       cfg,
 		Logger:                       log,
 	})
@@ -211,6 +230,14 @@ func main() {
 	<-sigChan
 
 	log.Info("Shutting down...")
+
+	// Flush any pending LLM ad-filter batches BEFORE stopping the bots —
+	// FlushAll fail-opens (forwards without judging) so buffered messages
+	// are not lost. Doing this first lets the forward calls go through
+	// while the bot clients are still alive.
+	if llmBatcher != nil {
+		llmBatcher.FlushAll()
+	}
 
 	// Stop all bots
 	cancel()
