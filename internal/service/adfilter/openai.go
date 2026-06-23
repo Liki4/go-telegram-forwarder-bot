@@ -15,24 +15,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// adVerdictSchemaOpenAI is the JSON Schema passed to OpenAI's response_format.
-// OpenAI strict mode forbids "description" inside the schema object, so we omit
-// it here (unlike the Anthropic variant which supports it).
-var adVerdictSchemaOpenAI = map[string]any{
-	"type": "object",
-	"properties": map[string]any{
-		"verdict": map[string]any{
-			"type": "string",
-			"enum": []string{"AD", "NORMAL"},
-		},
-		"reason": map[string]any{
-			"type": "string",
-		},
-	},
-	"required":             []string{"verdict", "reason"},
-	"additionalProperties": false,
-}
-
 type openAIJudge struct {
 	httpClient *http.Client
 	endpoint   string
@@ -64,24 +46,13 @@ func newOpenAIJudge(cfg *config.LLMAdFilterConfig, httpClient *http.Client, logg
 	}
 }
 
-type openAIResponseFormat struct {
-	Type       string              `json:"type"` // "json_schema"
-	JSONSchema openAIJSONSchemaDef `json:"json_schema"`
-}
-
-type openAIJSONSchemaDef struct {
-	Name   string         `json:"name"`
-	Strict bool           `json:"strict"`
-	Schema map[string]any `json:"schema"`
-}
-
 type openAIRequest struct {
-	Model          string                `json:"model"`
-	MaxTokens      int                   `json:"max_tokens"`
-	Temperature    float64               `json:"temperature"`
-	Seed           *int                  `json:"seed,omitempty"`
-	ResponseFormat *openAIResponseFormat `json:"response_format,omitempty"`
-	Messages       []openAIMessage       `json:"messages"`
+	Model          string            `json:"model"`
+	MaxTokens      int               `json:"max_tokens"`
+	Temperature    float64           `json:"temperature"`
+	Seed           *int              `json:"seed,omitempty"`
+	ResponseFormat map[string]string `json:"response_format"`
+	Messages       []openAIMessage   `json:"messages"`
 }
 
 type openAIMessage struct {
@@ -105,18 +76,11 @@ func (j *openAIJudge) Judge(ctx context.Context, text string) (Result, error) {
 
 	seed := 0
 	body, err := json.Marshal(openAIRequest{
-		Model:       j.model,
-		MaxTokens:   256,
-		Temperature: 0,
-		Seed:        &seed,
-		ResponseFormat: &openAIResponseFormat{
-			Type: "json_schema",
-			JSONSchema: openAIJSONSchemaDef{
-				Name:   "ad_verdict",
-				Strict: true,
-				Schema: adVerdictSchemaOpenAI,
-			},
-		},
+		Model:          j.model,
+		MaxTokens:      256,
+		Temperature:    0,
+		Seed:           &seed,
+		ResponseFormat: map[string]string{"type": "json_object"},
 		Messages: []openAIMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: text},
@@ -179,12 +143,10 @@ func (j *openAIJudge) Judge(ctx context.Context, text string) (Result, error) {
 		return Result{IsAd: false}, nil
 	}
 
-	// Try structured JSON first.
+	// Try structured JSON first (DeepSeek json_object and OpenAI json_schema both
+	// produce valid JSON matching the format described in the system prompt).
 	var vr verdictResponse
 	if err := json.Unmarshal([]byte(rawJSON), &vr); err != nil {
-		// Fall back to free-text parsing for models/gateways that don't
-		// support structured output (e.g. DeepSeek via OpenAI-compatible
-		// endpoints that ignore json_schema).
 		result := parseFreeTextVerdict(rawJSON)
 		j.logger.Warn("llm ad judge (openai): failed to parse response JSON, fell back to free-text",
 			zap.String("model", j.model),
