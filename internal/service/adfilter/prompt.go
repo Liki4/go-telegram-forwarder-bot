@@ -13,10 +13,4 @@ Classify as AD if the message is promoting, soliciting, or directing readers tow
 - Paid courses, "make money online" pitches, MLM, pyramid schemes (赚钱项目, 兼职刷单)
 - Generic "contact me on X for the offer" solicitations
 
-Classify as NORMAL for: ordinary personal conversation, questions, opinions, news discussion, technical content, jokes, complaints, or anything that is not selling/promoting something. **When in doubt, choose NORMAL** — a false positive blocks a real user.
-
-Respond on a single line with exactly one of:
-AD: <short reason in <=10 words>
-NORMAL
-
-Do not include any other text, explanation, or markdown.`
+Classify as NORMAL for: ordinary personal conversation, questions, opinions, news discussion, technical content, jokes, complaints, or anything that is not selling/promoting something. **When in doubt, choose NORMAL** — a false positive blocks a real user.`
