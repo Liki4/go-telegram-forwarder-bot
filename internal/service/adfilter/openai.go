@@ -46,13 +46,18 @@ func newOpenAIJudge(cfg *config.LLMAdFilterConfig, httpClient *http.Client, logg
 	}
 }
 
+type thinkingParam struct {
+	Type string `json:"type"`
+}
+
 type openAIRequest struct {
-	Model          string            `json:"model"`
-	MaxTokens      int               `json:"max_tokens"`
-	Temperature    float64           `json:"temperature"`
-	Seed           *int              `json:"seed,omitempty"`
-	ResponseFormat map[string]string `json:"response_format"`
-	Messages       []openAIMessage   `json:"messages"`
+	Model          string             `json:"model"`
+	MaxTokens      int                `json:"max_tokens"`
+	Temperature    float64            `json:"temperature"`
+	Seed           *int               `json:"seed,omitempty"`
+	Thinking       *thinkingParam     `json:"thinking,omitempty"`
+	ResponseFormat map[string]string  `json:"response_format"`
+	Messages       []openAIMessage    `json:"messages"`
 }
 
 type openAIMessage struct {
@@ -77,9 +82,10 @@ func (j *openAIJudge) Judge(ctx context.Context, text string) (Result, error) {
 	seed := 0
 	body, err := json.Marshal(openAIRequest{
 		Model:          j.model,
-		MaxTokens:      1024,
+		MaxTokens:      256,
 		Temperature:    0,
 		Seed:           &seed,
+		Thinking:       &thinkingParam{Type: "disabled"},
 		ResponseFormat: map[string]string{"type": "json_object"},
 		Messages: []openAIMessage{
 			{Role: "system", Content: systemPrompt},
