@@ -27,6 +27,7 @@
 - **消息映射**：完整记录所有消息的映射关系，支持复杂的双向对话场景
 - **智能黑名单**：正确处理 ban/unban 组合，确保黑名单状态准确
 - **广告拦截**：可配置的广告拦截功能，自动拦截包含 @用户名、链接、按钮或通过其他 Bot 发送的消息，以及外部回复消息引用内容中的广告，防止广告骚扰
+- **LLM 广告拦截**（可选二级）：在规则拦截之后接入 LLM（Claude / OpenAI 兼容），识别绕过规则的纯文本广告（VPN、频道买卖、虚拟货币推广等）。按 Guest 时间窗合并多条消息一并判断，捕捉拆分发送的广告。**仅 Superuser 可针对单个 ForwarderBot 开启**，由 Superuser 在 `/manage` 菜单中手动控制；失败时 fail-open（按正常消息转发）。
 
 ## 🏗️ 系统架构
 
@@ -195,6 +196,18 @@ proxy:
 
 ad_filter:
   enabled: false          # 是否启用广告拦截（拦截包含 @用户名、链接、按钮或通过其他 Bot 发送的消息）
+
+# 可选：LLM 二级广告拦截。规则拦截通过后接入 LLM 判定纯文本广告。
+# 全局配置 provider/api_key/model；具体哪些 ForwarderBot 启用由 Superuser
+# 在 /manage 菜单里逐个开关（默认全部关闭）。失败 fail-open。
+# llm_ad_filter:
+#   provider: "anthropic"          # "anthropic" 或 "openai"（兼容 gpt-*、vLLM、ollama、OpenRouter 等）
+#   api_key: "sk-ant-..."
+#   model: "claude-opus-4-8"       # 成本敏感场景可用 "claude-haiku-4-5-20251001"
+#   base_url: ""                   # 可选；用于 OpenAI 兼容端点
+#   timeout_seconds: 10            # 每次请求超时；默认 10
+#   max_text_chars: 500            # 送 LLM 之前截断长度；默认 500
+#   batch_window_seconds: 5        # 同一 Guest 消息合并窗口；默认 5 秒
 ```
 
 ## 📖 使用指南
@@ -372,6 +385,8 @@ ForwarderBot 接收
     ↓
 检查广告内容（如果启用） → 如果包含 @用户名、链接、按钮或通过其他 Bot 发送，或外部回复的引用内容包含广告，拦截并通知用户
     ↓
+LLM 广告拦截（如果该 Bot 由 Superuser 开启） → 加入时间窗 buffer，窗口到期后合并判断；判为广告则丢弃整批并通知，否则在 batcher goroutine 中转发
+    ↓
 检查限流 → 如果超限，延迟发送
     ↓
 并发转发给所有 Recipients
@@ -491,6 +506,74 @@ Guest 发送消息
 - 广告检测优先使用 Telegram 的 Entity 系统（更准确），如果没有 Entity 则使用正则表达式精确匹配
 - 正则表达式匹配避免误判（如邮箱地址中的 `@` 不会被识别为用户名）
 
+### LLM 广告拦截（可选二级过滤）
+
+规则拦截只能识别带 `@用户名`、链接、按钮、ViaBot 这类显式特征的广告。对于纯文本广告（VPN、机场代理、频道买卖、虚拟货币推广、博彩、跑分、贷款、刷单兼职等），需要语义理解。系统支持接入 LLM 作为二级过滤层。
+
+**支持的 Provider：**
+- **Anthropic Claude**：通过官方 Go SDK，推荐 `claude-opus-4-8`（最准）或 `claude-haiku-4-5-20251001`（更便宜，约 1/5 价格，对短文本分类完全够用）
+- **OpenAI 兼容**：通过 HTTP 调用 `/v1/chat/completions`，**自动兼容** vLLM、ollama、OpenRouter、LM Studio、自建 OpenAI 兼容端点等任何标准 OpenAI 协议服务
+
+**访问控制：**
+- 全局配置（API key、provider、model）放在 `config.yaml` 的 `llm_ad_filter` 块中
+- **针对单个 ForwarderBot 的启用/禁用仅 Superuser 可控**，Manager 和 Admin 无权操作
+- 在 ManagerBot 的 `/manage → 选择 Bot` 菜单里会显示当前状态以及切换按钮
+- 默认所有 ForwarderBot 都关闭
+
+**多消息时间窗合并：**
+
+广告主常常会把广告拆成多条无害消息发出来，比如：
+```
+第 1 条：朋友们有个好东西分享
+第 2 条：内容很丰富，便宜量大
+第 3 条：详情看签名 / 私聊
+```
+每条单看都不像广告，只有合起来才能判定。系统按 `(bot_id, guest_user_id)` 维护一个时间窗 buffer（默认 5 秒），同一 Guest 在窗口内发出的所有消息会被合并、拼接、一次性送 LLM 判断。
+
+**代价：** 启用 LLM 拦截的 ForwarderBot，**每条消息会延迟 `batch_window_seconds` 秒后才转发**。这是接入 LLM 必须接受的取舍——窗口越长抓得越准（捕捉更多拆分广告），延迟越大。可以在配置里调整这个值（默认 5 秒）。
+
+**工作流程：**
+```
+Guest 发送消息
+    ↓
+（黑名单 / 规则广告 / 命令等检查通过）
+    ↓
+ForwarderBot 是否启用 LLM 广告拦截？(Superuser 控制)
+    ↓ 是
+按 (bot_id, guest_user_id) 加入 batch buffer
+启动/复用 batch_window_seconds 定时器
+    ↓
+立即返回，HandleMessage 不阻塞
+    ↓ 定时器到期
+拼接 batch 内所有消息文本（用 ---  分隔）
+    ↓
+送 LLM 判断（带提示词：识别 VPN/虚拟货币/博彩等推广）
+    ↓
+NORMAL → 按顺序转发 batch 内所有消息
+AD     → 丢弃 batch 内所有消息 + 给 Guest 发一条聚合通知
+错误   → fail-open，按 NORMAL 处理（避免误伤）
+```
+
+**LLM 判定结果会写入 audit log**（`audit_logs` 表的 `llm_ad_blocked` 动作），包含截断后的文本、模型给出的原因、Bot ID、Guest user ID 等，便于 Superuser 复盘和调优 prompt。`/manage` 中切换开关本身也会写 `llm_ad_filter_toggle` audit log。
+
+**Proxy 支持：** 两种 provider 都走项目现有的 `proxy` 配置，所以受限网络环境下也能用。
+
+**关机优雅退出：** 收到 SIGTERM/SIGINT 时，系统会先把所有 pending 的 batch 走 fail-open 路径直接转发（不送 LLM），避免 buffer 里的消息丢失。
+
+**配置方式：**
+```yaml
+llm_ad_filter:
+  provider: "anthropic"
+  api_key: "sk-ant-..."
+  model: "claude-opus-4-8"
+  timeout_seconds: 10
+  max_text_chars: 500
+  batch_window_seconds: 5
+```
+配置之后还需要由 Superuser 在 ManagerBot 中针对具体的 ForwarderBot 手动启用（`/manage → 选 Bot → Enable LLM Ad Filter`）。
+
+**禁用方式：** 把 `llm_ad_filter` 块整个删掉或留空（特征性的 `provider`/`api_key`/`model` 三个字段都为空），则全局禁用，所有 ForwarderBot 的开关都成为 no-op。
+
 ## 🧪 测试
 
 ### 运行测试
@@ -554,6 +637,7 @@ go-telegram-forwarder-bot/
 │   │   │   └── retry.go            # 重试
 │   │   ├── blacklist/              # 黑名单服务
 │   │   ├── statistics/             # 统计服务
+│   │   ├── adfilter/               # LLM 广告分类器（Judge 接口 + Anthropic/OpenAI 实现 + 时间窗 Batcher）
 │   │   ├── error_notifier.go       # 错误通知
 │   │   └── group_monitor.go        # 群组监控
 │   ├── logger/                     # 日志封装
@@ -578,6 +662,7 @@ go-telegram-forwarder-bot/
 8. **消息映射安全**：通过消息映射准确识别用户，防止误操作
 9. **黑名单逻辑**：正确处理 ban/unban 组合，确保状态准确
 10. **广告拦截**：可配置的广告拦截功能，自动拦截包含 @用户名、链接、按钮或通过其他 Bot 发送的消息，防止广告骚扰
+11. **LLM 广告拦截**：可选的二级语义广告过滤，仅 Superuser 可针对单个 ForwarderBot 开启；判定结果与开关变更均写入审计日志
 
 ## 🐛 故障排除
 
@@ -688,6 +773,24 @@ go-telegram-forwarder-bot/
 
 **禁用广告拦截：**
 设置 `ad_filter.enabled: false` 或删除该配置项（默认为 false）。
+
+#### 9. LLM 广告拦截
+
+**问题**：纯文本广告（VPN、虚拟货币、频道买卖等）绕过了规则拦截怎么办？
+
+**解决方案：**
+启用可选的 LLM 二级过滤——在 `config.yaml` 配置 `llm_ad_filter` 块（provider/api_key/model），再由 **Superuser** 在 ManagerBot 的 `/manage → 选 Bot → Enable LLM Ad Filter` 中针对具体 ForwarderBot 开启。详见上文「LLM 广告拦截（可选二级过滤）」一节。
+
+**常见疑问：**
+- **开关在哪？** 只有 Superuser 能在 `/manage` 进入某个 Bot 的详情页看到开关，Manager / Admin 看不到也无法调用。
+- **为什么消息延迟几秒才到？** 启用 LLM 拦截的 Bot 会按 `batch_window_seconds`（默认 5 秒）合并同一 Guest 的消息再统一判断，这是接入 LLM 的固有代价。想降低延迟可调小该值，但抓拆分广告的能力会下降。
+- **LLM 服务挂了会怎样？** fail-open——超时或报错时消息按正常转发，不会因为 LLM 故障误伤正常用户，只在日志里记 warning。
+- **配了 key 但所有 Bot 都没拦？** 检查是否已由 Superuser 对目标 Bot 打开开关（默认全部关闭）；全局配了 `llm_ad_filter` 不等于自动生效。
+- **想换更便宜的模型？** Anthropic 用 `claude-haiku-4-5-20251001`，或用 `provider: openai` 接自建/第三方 OpenAI 兼容端点（vLLM、ollama 等）。
+- **怎么复盘判定？** 查 `audit_logs` 表，`llm_ad_blocked` 是拦截记录（含原因与截断文本），`llm_ad_filter_toggle` 是开关变更记录。
+
+**禁用 LLM 广告拦截：**
+删除或留空 `llm_ad_filter` 块（`provider`/`api_key`/`model` 都为空）即全局禁用；或保留全局配置、仅由 Superuser 关闭单个 Bot 的开关。
 
 ## 📝 开发指南
 
