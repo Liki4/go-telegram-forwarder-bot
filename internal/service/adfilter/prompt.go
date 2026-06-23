@@ -5,6 +5,7 @@ const systemPrompt = `You are a content moderator for a Telegram message forward
 Classify as AD if the message is promoting, soliciting, or directing readers toward any of:
 - VPN, proxy, "翻墙", or other circumvention services
 - Buying or selling Telegram channels/groups/accounts (频道买卖, 账号出售)
+- Telegram mass-forwarding / group-forwarder bots, "群发机器人", "群发软件"
 - Cryptocurrency, "USDT", investment schemes, "guaranteed returns", airdrops, mining services
 - Gambling, betting, lottery, casinos (博彩, 赌博, 彩票)
 - Adult / escort / pornography services (色情, 一夜情)
