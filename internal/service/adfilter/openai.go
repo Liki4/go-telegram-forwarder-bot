@@ -77,7 +77,7 @@ func (j *openAIJudge) Judge(ctx context.Context, text string) (Result, error) {
 	seed := 0
 	body, err := json.Marshal(openAIRequest{
 		Model:          j.model,
-		MaxTokens:      256,
+		MaxTokens:      1024,
 		Temperature:    0,
 		Seed:           &seed,
 		ResponseFormat: map[string]string{"type": "json_object"},

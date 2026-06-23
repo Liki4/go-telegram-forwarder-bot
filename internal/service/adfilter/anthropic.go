@@ -79,7 +79,7 @@ func (j *anthropicJudge) Judge(ctx context.Context, text string) (Result, error)
 
 	resp, err := j.client.Beta.Messages.New(callCtx, anthropic.BetaMessageNewParams{
 		Model:       anthropic.Model(j.model),
-		MaxTokens:   256,
+		MaxTokens:   1024,
 		Temperature: anthropic.Float(0),
 		Thinking: anthropic.BetaThinkingConfigParamUnion{
 			OfDisabled: &anthropic.BetaThinkingConfigDisabledParam{},
