@@ -316,7 +316,7 @@ spec:
     spec:
       containers:
       - name: bot
-        image: registry.cn-hongkong.aliyuncs.com/liki4/go_telegram_forwarder_bot:v0.0.1
+        image: registry.cn-hongkong.aliyuncs.com/liki4/go_telegram_forwarder_bot:v0.0.7
         imagePullPolicy: Always
         env:
         - name: CONFIG_PATH
