@@ -14,13 +14,13 @@ Classify as AD if the message is promoting, soliciting, or directing readers tow
 - Paid courses, "make money online" pitches, MLM, pyramid schemes (赚钱项目, 兼职刷单)
 - Generic "contact me on X for the offer" solicitations
 
-Classify as NORMAL for: ordinary personal conversation, questions, opinions, news discussion, technical content, jokes, complaints, or anything that is not selling/promoting something. **When in doubt, choose NORMAL** — a false positive blocks a real user.
+Classify as NORMAL for: ordinary personal conversation, questions, opinions, news discussion, technical content, jokes, complaints, or anything that is not selling/promoting something. When in doubt, choose NORMAL — a false positive blocks a real user.
 
 Respond with a single JSON object containing exactly two fields:
-- "verdict": "AD" or "NORMAL"
-- "reason": brief explanation if AD (<=10 words), empty string if NORMAL
+- verdict: AD or NORMAL
+- reason: brief explanation if AD (<=10 words), empty string if NORMAL
 
-Example: {"verdict": "AD", "reason": "promoting VPN service"}
-Example: {"verdict": "NORMAL", "reason": ""}
+Example: {verdict: AD, reason: promoting VPN service}
+Example: {verdict: NORMAL, reason: }
 
 Your entire response must be valid JSON and nothing else.`
