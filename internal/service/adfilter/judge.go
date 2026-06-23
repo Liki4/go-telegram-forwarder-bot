@@ -52,6 +52,27 @@ func NewJudge(cfg *config.LLMAdFilterConfig, proxy *config.ProxyConfig, logger *
 	}
 }
 
+// parseFreeTextVerdict is a fallback for models/gateways that ignore the
+// structured output format and return free-text "AD: <reason>" / "NORMAL".
+func parseFreeTextVerdict(raw string) Result {
+	first := strings.TrimSpace(raw)
+	if idx := strings.IndexAny(first, "\r\n"); idx >= 0 {
+		first = first[:idx]
+	}
+
+	trimmed := strings.TrimSpace(strings.TrimLeft(first, "#*`> "))
+	upper := strings.ToUpper(trimmed)
+
+	if strings.HasPrefix(upper, "AD") {
+		reason := ""
+		if i := strings.IndexAny(trimmed, ":：-—"); i >= 0 {
+			reason = strings.TrimSpace(trimmed[i+1:])
+		}
+		return Result{IsAd: true, Reason: reason, Raw: first}
+	}
+	return Result{IsAd: false, Raw: first}
+}
+
 // truncate returns s clipped to max runes (not bytes) to avoid breaking UTF-8.
 func truncate(s string, max int) string {
 	if max <= 0 {

@@ -125,13 +125,18 @@ func (j *anthropicJudge) Judge(ctx context.Context, text string) (Result, error)
 		return Result{IsAd: false}, nil
 	}
 
+	// Try structured JSON first.
 	var vr verdictResponse
 	if err := json.Unmarshal([]byte(rawJSON), &vr); err != nil {
-		j.logger.Warn("llm ad judge: failed to parse response JSON, treating as NORMAL",
+		// Fall back to free-text parsing for models/gateways that don't
+		// support structured output (e.g. DeepSeek via proxy).
+		result := parseFreeTextVerdict(rawJSON)
+		j.logger.Warn("llm ad judge: failed to parse response JSON, fell back to free-text",
 			zap.String("model", j.model),
 			zap.String("raw", rawJSON),
+			zap.Bool("is_ad", result.IsAd),
 			zap.Error(err))
-		return Result{IsAd: false}, nil
+		return result, nil
 	}
 
 	if vr.Verdict == "AD" {
